@@ -6,7 +6,6 @@ use std::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc, Mutex,
     },
-    thread,
 };
 
 #[cfg(not(windows))]
@@ -128,10 +127,10 @@ impl ChannelManager {
                 error!("Unable write to player status: {e}");
             };
 
-            thread::spawn(move || {
+            actix_web::rt::spawn(async move {
                 let run_count = self_clone.run_count.clone();
 
-                if let Err(e) = start_channel(self_clone) {
+                if let Err(e) = start_channel(self_clone).await {
                     run_count.fetch_sub(1, Ordering::SeqCst);
                     error!("{e}");
                 };
@@ -157,19 +156,18 @@ impl ChannelManager {
             if index + 1 == ARGS.channels.clone().unwrap_or_default().len() {
                 let run_count = self_clone.run_count.clone();
 
-                tokio::task::spawn_blocking(move || {
-                    if let Err(e) = start_channel(self_clone) {
+                actix_web::rt::spawn(async move {
+                    if let Err(e) = start_channel(self_clone).await {
                         run_count.fetch_sub(1, Ordering::SeqCst);
                         error!("{e}");
                     }
                 })
-                .await
-                .unwrap();
+                .await;
             } else {
-                thread::spawn(move || {
+                actix_web::rt::spawn(async move {
                     let run_count = self_clone.run_count.clone();
 
-                    if let Err(e) = start_channel(self_clone) {
+                    if let Err(e) = start_channel(self_clone).await {
                         run_count.fetch_sub(1, Ordering::SeqCst);
                         error!("{e}");
                     };
@@ -330,7 +328,7 @@ impl ChannelController {
     }
 }
 
-pub fn start_channel(manager: ChannelManager) -> Result<(), ProcessError> {
+pub async fn start_channel(manager: ChannelManager) -> Result<(), ProcessError> {
     let config = manager.config.lock()?.clone();
     let mode = config.output.mode.clone();
     let filler_list = manager.filler_list.clone();
@@ -345,15 +343,15 @@ pub fn start_channel(manager: ChannelManager) -> Result<(), ProcessError> {
     debug!(target: Target::all(), channel = channel_id; "Start ffplayout v{VERSION}, channel: <yellow>{channel_id}</>");
 
     // Fill filler list, can also be a single file.
-    thread::spawn(move || {
-        fill_filler_list(&config, Some(filler_list));
+    actix_web::rt::spawn(async move {
+        fill_filler_list(&config, Some(filler_list)).await;
     });
 
     match mode {
-        // write files/playlist to HLS m3u8 playlist
-        HLS => write_hls(manager),
-        // play on desktop or stream to a remote target
-        _ => player(manager),
+        // // write files/playlist to HLS m3u8 playlist
+        // HLS => write_hls(manager),
+        // // play on desktop or stream to a remote target
+        _ => player(manager).await,
     }
 }
 

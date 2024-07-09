@@ -3,10 +3,11 @@ use std::sync::{
     {Arc, Mutex},
 };
 
+use async_walkdir::WalkDir;
+use futures::stream::StreamExt;
 use lexical_sort::natural_lexical_cmp;
 use log::*;
 use rand::{seq::SliceRandom, thread_rng};
-use walkdir::WalkDir;
 
 use crate::player::{
     controller::ChannelManager,
@@ -24,7 +25,7 @@ pub struct FolderSource {
 }
 
 impl FolderSource {
-    pub fn new(config: &PlayoutConfig, manager: ChannelManager) -> Self {
+    pub async fn new(config: &PlayoutConfig, manager: ChannelManager) -> Self {
         let id = config.general.channel_id;
         let mut path_list = vec![];
         let mut media_list = vec![];
@@ -46,16 +47,25 @@ impl FolderSource {
         for path in &path_list {
             if !path.is_dir() {
                 error!(target: Target::file_mail(), channel = id; "Path not exists: <b><magenta>{path:?}</></b>");
+                continue;
             }
 
-            for entry in WalkDir::new(path)
-                .into_iter()
-                .flat_map(|e| e.ok())
-                .filter(|f| f.path().is_file())
-                .filter(|f| include_file_extension(config, f.path()))
-            {
-                let media = Media::new(0, &entry.path().to_string_lossy(), false);
-                media_list.push(media);
+            let mut entries = WalkDir::new(path);
+
+            loop {
+                match entries.next().await {
+                    Some(Ok(entry)) => {
+                        if entry.path().is_file() && include_file_extension(config, &entry.path()) {
+                            let media = Media::new(0, &entry.path().to_string_lossy(), false);
+                            media_list.push(media);
+                        }
+                    }
+                    Some(Err(e)) => {
+                        error!("{e}");
+                        break;
+                    }
+                    None => break,
+                }
             }
         }
 
@@ -168,7 +178,7 @@ impl Iterator for FolderSource {
     }
 }
 
-pub fn fill_filler_list(
+pub async fn fill_filler_list(
     config: &PlayoutConfig,
     fillers: Option<Arc<Mutex<Vec<Media>>>>,
 ) -> Vec<Media> {
@@ -177,22 +187,31 @@ pub fn fill_filler_list(
     let filler_path = &config.storage.filler;
 
     if filler_path.is_dir() {
-        for (index, entry) in WalkDir::new(&config.storage.filler)
-            .into_iter()
-            .flat_map(|e| e.ok())
-            .filter(|f| f.path().is_file())
-            .filter(|f| include_file_extension(config, f.path()))
-            .enumerate()
-        {
-            let mut media = Media::new(index, &entry.path().to_string_lossy(), false);
+        let mut entries = WalkDir::new(&config.storage.filler);
+        let mut index = 0;
 
-            if fillers.is_none() {
-                if let Err(e) = media.add_probe(false) {
-                    error!(target: Target::file_mail(), channel = id; "{e:?}");
-                };
+        loop {
+            match entries.next().await {
+                Some(Ok(entry)) => {
+                    if entry.path().is_file() && include_file_extension(config, &entry.path()) {
+                        let mut media = Media::new(index, &entry.path().to_string_lossy(), false);
+
+                        if fillers.is_none() {
+                            if let Err(e) = media.add_probe(false) {
+                                error!(target: Target::file_mail(), channel = id; "{e:?}");
+                            };
+                        }
+
+                        filler_list.push(media);
+                        index += 1;
+                    }
+                }
+                Some(Err(e)) => {
+                    error!("{e}");
+                    break;
+                }
+                None => break,
             }
-
-            filler_list.push(media);
         }
 
         if config.storage.shuffle {

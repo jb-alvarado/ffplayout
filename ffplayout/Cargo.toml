@@ -21,6 +21,7 @@ actix-web-httpauth = "0.8"
 actix-web-lab = "0.20"
 actix-web-static-files = "4.0"
 argon2 = "0.5"
+async-walkdir = "2"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
 clap = { version = "4.3", features = ["derive", "env"] }
 crossbeam-channel = "0.5"
@@ -28,6 +29,7 @@ derive_more = "0.99"
 faccess = "0.2"
 ffprobe = "0.4"
 flexi_logger = { version = "0.28", features = ["kv", "colors"] }
+futures = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 home = "0.5"
 jsonwebtoken = "9"
