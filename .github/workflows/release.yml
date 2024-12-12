@@ -43,7 +43,7 @@ jobs:
         if: ${{ matrix.os == 'ubuntu-latest' }}
         run: |
           sudo apt-get update
-          sudo apt-get -y install musl musl-dev musl-tools pandoc gcc-aarch64-linux-gnu
+          sudo apt-get -y install musl musl-dev musl-tools pandoc gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross
           rustup target add x86_64-unknown-linux-musl
           rustup target add aarch64-unknown-linux-gnu
           ./scripts/man_create.sh
