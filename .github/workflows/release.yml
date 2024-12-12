@@ -42,7 +42,7 @@ jobs:
       - name: Build on Linux
         if: ${{ matrix.os == 'ubuntu-latest' }}
         run: |
-          apt-get -y install musl-gcc
+          sudo apt-get update && sudo apt-get -y install musl-gcc
           rustup target add x86_64-unknown-linux-musl
           rustup target add aarch64-unknown-linux-gnu
           cargo build --release --target=x86_64-unknown-linux-musl
