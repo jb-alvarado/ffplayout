@@ -23,7 +23,7 @@ jobs:
         if: ${{ matrix.os == 'windows-latest' }}
         run: |
           cargo build --release
-          cp ./target/x86_64-pc-windows-msvc/release/ffplayout.exe .
+          cp ./target/release/ffplayout.exe .
           tar -a -c --exclude=*.service -f "ffplayout-${{ github.ref_name }}_x86_64-pc-windows-msvc.zip" assets docker docs LICENSE README.md CHANGELOG.md ffplayout.exe
 
       - name: Build on macOS
