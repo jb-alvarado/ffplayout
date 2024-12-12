@@ -32,10 +32,10 @@ jobs:
           rustup target add x86_64-apple-darwin
           rustup target add aarch64-apple-darwin
           cargo build --release --target=x86_64-apple-darwin
+          cargo build --release --target=aarch64-apple-darwin
           cp ./target/x86_64-apple-darwin/release/ffplayout .
           zip -r "ffplayout-${{ github.ref_name }}_x86_64-apple-darwin.zip" assets docker docs LICENSE README.md CHANGELOG.md ffplayout -x *.db -x *.db-shm -x *.db-wal -x *.service
           rm -f ffplayout
-          cargo build --release --target=aarch64-apple-darwin
           cp ./target/aarch64-apple-darwin/release/ffplayout .
           zip -r "ffplayout-${{ github.ref_name }}_aarch64-apple-darwin.zip" assets docker docs LICENSE README.md CHANGELOG.md ffplayout -x *.db -x *.db-shm -x *.db-wal -x *.service
 
@@ -48,6 +48,7 @@ jobs:
           cargo install cargo-deb
           cargo install cargo-generate-rpm
           cargo build --release --target=x86_64-unknown-linux-musl
+          cargo build --release --target=aarch64-unknown-linux-gnu
           tar --transform 's/\.\/target\/.*\///g' -czvf "ffplayout-${{ github.ref_name }}_x86_64-unknown-linux-musl.tar.gz" --exclude='*.db' --exclude='*.db-shm' --exclude='*.db-wal' assets docker docs LICENSE README.md CHANGELOG.md ./target/x86_64-unknown-linux-musl/release/ffplayout
           cargo deb --no-build --target=x86_64-unknown-linux-musl -p ffplayout --manifest-path=engine/Cargo.toml -o ffplayout_${{ github.ref_name }}-1_amd64.deb
           cargo deb --no-build --target=aarch64-unknown-linux-gnu --variant=arm64 -p ffplayout --manifest-path=engine/Cargo.toml -o ffplayout_${{ github.ref_name }}-1_arm64.deb
