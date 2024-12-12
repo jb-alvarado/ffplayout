@@ -25,6 +25,7 @@ jobs:
           cargo build --release
           cp ./target/release/ffplayout.exe .
           tar -a -c --exclude=*.service -f "ffplayout-${{ github.ref_name }}_x86_64-pc-windows-msvc.zip" assets docker docs LICENSE README.md CHANGELOG.md ffplayout.exe
+          del /q ffplayout.exe
 
       - name: Build on macOS
         if: ${{ matrix.os == 'macOS-latest' }}
@@ -38,6 +39,7 @@ jobs:
           rm -f ffplayout
           cp ./target/aarch64-apple-darwin/release/ffplayout .
           zip -r "ffplayout-${{ github.ref_name }}_aarch64-apple-darwin.zip" assets docker docs LICENSE README.md CHANGELOG.md ffplayout -x *.db -x *.db-shm -x *.db-wal -x *.service
+          rm -f ffplayout
 
       - name: Build on Linux
         if: ${{ matrix.os == 'ubuntu-latest' }}
