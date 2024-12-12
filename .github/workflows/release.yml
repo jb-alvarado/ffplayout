@@ -25,7 +25,7 @@ jobs:
           cargo build --release
           cp ./target/release/ffplayout.exe .
           tar -a -c --exclude=*.service -f "ffplayout-${{ github.ref_name }}_x86_64-pc-windows-msvc.zip" assets docker docs LICENSE README.md CHANGELOG.md ffplayout.exe
-          del /q ffplayout.exe
+          del ffplayout.exe
 
       - name: Build on macOS
         if: ${{ matrix.os == 'macOS-latest' }}
