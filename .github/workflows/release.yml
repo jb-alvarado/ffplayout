@@ -29,6 +29,7 @@ jobs:
       - name: Build on macOS
         if: ${{ matrix.os == 'macOS-latest' }}
         run: |
+          rustup target add x86_64-apple-darwin
           rustup target add aarch64-apple-darwin
           cargo build --release --target=x86_64-apple-darwin
           cp ./target/x86_64-apple-darwin/release/ffplayout .
