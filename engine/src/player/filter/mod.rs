@@ -308,7 +308,7 @@ fn hw_download(chain: &str, f: &str) -> String {
     {
         filter = "hwdownload".to_string();
 
-        if !chain.contains("_cuda") {
+        if !chain.contains("_cuda") || !chain.contains("_npp") {
             filter.push_str(",format=nv12");
         }
     }
@@ -333,7 +333,7 @@ fn hw_upload_str(config: &PlayoutConfig) -> String {
 fn hw_upload(config: &PlayoutConfig, chain: &str, f: &str) -> String {
     let mut filter = String::new();
 
-    if !last_is_hw(chain) && is_hw(f) && !f.contains("hwdownload") && !f.contains("hwupload") {
+    if !last_is_hw(chain) && is_hw(f) && !f.contains("hwdownload") && !f.contains("hwupload") && !f.contains("hwupload_cuda") {
         filter = hw_upload_str(config);
     }
 
