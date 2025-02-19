@@ -7,7 +7,10 @@ use crate::player::{
     controller::ProcessUnit::*,
     utils::{custom_format, Media},
 };
-use crate::utils::config::PlayoutConfig;
+use crate::utils::{
+    config::PlayoutConfig,
+    advanced_config::FilterValue,
+};
 
 pub async fn filter_node(
     config: &PlayoutConfig,
@@ -46,8 +49,9 @@ pub async fn filter_node(
             .replace(':', "\\:");
 
         filter = match &config.advanced.filter.drawtext_from_file {
-            Some(drawtext) => custom_format(drawtext, &[&escaped_text, &config.text.style, &font]),
-            None => format!("drawtext=text='{escaped_text}':{}{font}", config.text.style),
+            FilterValue::Some(drawtext) => custom_format(drawtext, &[&escaped_text, &config.text.style, &font]),
+            FilterValue::None => format!("drawtext=text='{escaped_text}':{}{font}", config.text.style),
+            FilterValue::Null => String::new()
         };
     } else if let Some(socket) = zmq_socket {
         let mut filter_cmd = format!("text=''{font}");
@@ -59,11 +63,12 @@ pub async fn filter_node(
         }
 
         filter = match config.advanced.filter.drawtext_from_zmq.clone() {
-            Some(drawtext) => custom_format(&drawtext, &[&socket.replace(':', "\\:"), &filter_cmd]),
-            None => format!(
+            FilterValue::Some(drawtext) => custom_format(&drawtext, &[&socket.replace(':', "\\:"), &filter_cmd]),
+            FilterValue::None => format!(
                 "zmq=b=tcp\\\\://'{}',drawtext@dyntext={filter_cmd}",
                 socket.replace(':', "\\:")
             ),
+            FilterValue::Null => String::new()
         };
     }
 

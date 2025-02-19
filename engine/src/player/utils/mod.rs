@@ -1122,9 +1122,14 @@ pub fn parse_log_level_filter(s: &str) -> Result<LevelFilter, &'static str> {
 }
 
 pub fn custom_format<T: fmt::Display>(template: &str, args: &[T]) -> String {
+    if args.is_empty() || !template.contains('{') {
+        return template.to_string();
+    }
+
     let mut filled_template = String::new();
     let mut arg_iter = args.iter().map(T::to_string);
     let mut template_iter = template.chars();
+    let mut found_placeholder = false;
 
     while let Some(c) = template_iter.next() {
         if c == '{' {
@@ -1134,12 +1139,19 @@ pub fn custom_format<T: fmt::Display>(template: &str, args: &[T]) -> String {
                 } else if nc == '}' {
                     if let Some(arg) = arg_iter.next() {
                         filled_template.push_str(&arg);
+                        found_placeholder = true;
                     } else {
                         filled_template.push(c);
                         filled_template.push(nc);
                     }
                 } else if let Some(n) = nc.to_digit(10) {
-                    filled_template.push_str(&args[n as usize].to_string());
+                    if n < args.len() as u32 {
+                        filled_template.push_str(&args[n as usize].to_string());
+                        found_placeholder = true;
+                    } else {
+                        filled_template.push(c);
+                        filled_template.push(nc);
+                    }
                 } else {
                     filled_template.push(nc);
                 }
@@ -1155,6 +1167,10 @@ pub fn custom_format<T: fmt::Display>(template: &str, args: &[T]) -> String {
         } else {
             filled_template.push(c);
         }
+    }
+
+    if !found_placeholder {
+        return template.to_string();
     }
 
     filled_template

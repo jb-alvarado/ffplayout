@@ -1,14 +1,103 @@
 use std::path::Path;
 
-use serde::{Deserialize, Serialize};
+use serde::{self, Deserialize, Deserializer, Serialize, Serializer};
 use serde_with::{serde_as, NoneAsEmptyString};
 use shlex::split;
-use sqlx::{Pool, Sqlite};
+use sqlx::{decode::Decode, encode::IsNull, sqlite::SqliteArgumentValue, Encode, Sqlite, Pool, Type};
+use std::error::Error as StdError;
 use tokio::io::AsyncReadExt;
 use ts_rs::TS;
 
 use crate::db::{handles, models::AdvancedConfiguration};
 use crate::utils::ServiceError;
+use derive_more::IsVariant;
+
+#[derive(Debug, Clone, TS, PartialEq, Default, IsVariant)]
+pub enum FilterValue {
+    Some(String),
+    Null,
+    #[default]
+    None,
+}
+
+impl<'de> Deserialize<'de> for FilterValue {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let opt = Option::<String>::deserialize(deserializer)?;
+        Ok(match opt {
+            Some(s) if s.trim().is_empty() => FilterValue::None,
+            Some(s) if s.to_lowercase() == "null" => FilterValue::Null,
+            Some(s) => FilterValue::Some(s),
+            None => FilterValue::None,
+        })
+    }
+}
+
+impl Serialize for FilterValue {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            FilterValue::Some(s) => Some(s).serialize(serializer),
+            FilterValue::Null => Some("null").serialize(serializer),
+            FilterValue::None => None::<String>.serialize(serializer),
+        }
+    }
+}
+
+impl From<Option<String>> for FilterValue {
+    fn from(opt: Option<String>) -> Self {
+        match opt {
+            Some(s) if s.trim().is_empty() => FilterValue::None,
+            Some(s) if s.to_lowercase() == "null" => FilterValue::Null,
+            Some(s) => FilterValue::Some(s),
+            None => FilterValue::None,
+        }
+    }
+}
+
+impl From<&str> for FilterValue {
+    fn from(s: &str) -> Self {
+        if s.trim().is_empty() {
+            FilterValue::None
+        } else if s.to_lowercase() == "null" {
+            FilterValue::Null
+        } else {
+            FilterValue::Some(s.to_string())
+        }
+    }
+}
+
+impl Type<Sqlite> for FilterValue {
+    fn type_info() -> <Sqlite as sqlx::Database>::TypeInfo {
+        <Option<String> as Type<Sqlite>>::type_info()
+    }
+}
+
+impl<'q> Encode<'q, Sqlite> for FilterValue {
+    fn encode_by_ref(&self, buf: &mut Vec<SqliteArgumentValue<'q>>) -> Result<IsNull, Box<dyn StdError + Send + Sync>> {
+        match self {
+            FilterValue::Some(s) => <Option<String> as Encode<Sqlite>>::encode_by_ref(&Some(s.clone()), buf),
+            FilterValue::Null => <Option<String> as Encode<Sqlite>>::encode_by_ref(&Some("null".to_string()), buf),
+            FilterValue::None => <Option<String> as Encode<Sqlite>>::encode_by_ref(&None, buf),
+        }
+    }
+}
+
+impl<'r> Decode<'r, Sqlite> for FilterValue {
+    fn decode(value: <Sqlite as sqlx::database::Database>::ValueRef<'r>) -> Result<Self, Box<dyn StdError + Send + Sync>> {
+        let value = <Option<String> as Decode<Sqlite>>::decode(value)?;
+        Ok(match value {
+            Some(s) if s.trim().is_empty() => FilterValue::None,
+            Some(s) if s.to_lowercase() == "null" => FilterValue::Null,
+            Some(s) => FilterValue::Some(s),
+            None => FilterValue::None,
+        })
+    }
+}
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone, TS)]
 #[ts(export, export_to = "advanced_config.d.ts")]
@@ -63,73 +152,72 @@ pub struct IngestConfig {
     pub input_cmd: Option<Vec<String>>,
 }
 
-#[serde_as]
 #[derive(Debug, Default, Serialize, Deserialize, Clone, TS)]
 #[ts(export, export_to = "advanced_config.d.ts")]
 pub struct FilterConfig {
     #[ts(type = "string")]
-    #[serde_as(as = "NoneAsEmptyString")]
-    pub deinterlace: Option<String>,
+    #[serde(default)]
+    pub deinterlace: FilterValue,
     #[ts(type = "string")]
-    #[serde_as(as = "NoneAsEmptyString")]
-    pub pad_video: Option<String>,
+    #[serde(default)]
+    pub pad_video: FilterValue,
     #[ts(type = "string")]
-    #[serde_as(as = "NoneAsEmptyString")]
-    pub fps: Option<String>,
+    #[serde(default)]
+    pub fps: FilterValue,
     #[ts(type = "string")]
-    #[serde_as(as = "NoneAsEmptyString")]
-    pub scale: Option<String>,
+    #[serde(default)]
+    pub scale: FilterValue,
     #[ts(type = "string")]
-    #[serde_as(as = "NoneAsEmptyString")]
-    pub set_dar: Option<String>,
+    #[serde(default)]
+    pub set_dar: FilterValue,
     #[ts(type = "string")]
-    #[serde_as(as = "NoneAsEmptyString")]
-    pub fade_in: Option<String>,
+    #[serde(default)]
+    pub fade_in: FilterValue,
     #[ts(type = "string")]
-    #[serde_as(as = "NoneAsEmptyString")]
-    pub fade_out: Option<String>,
+    #[serde(default)]
+    pub fade_out: FilterValue,
     #[ts(type = "string")]
-    #[serde_as(as = "NoneAsEmptyString")]
-    pub logo: Option<String>,
+    #[serde(default)]
+    pub logo: FilterValue,
     #[ts(type = "string")]
-    #[serde_as(as = "NoneAsEmptyString")]
-    pub overlay_logo_scale: Option<String>,
+    #[serde(default)]
+    pub overlay_logo_scale: FilterValue,
     #[ts(type = "string")]
-    #[serde_as(as = "NoneAsEmptyString")]
-    pub overlay_logo_fade_in: Option<String>,
+    #[serde(default)]
+    pub overlay_logo_fade_in: FilterValue,
     #[ts(type = "string")]
-    #[serde_as(as = "NoneAsEmptyString")]
-    pub overlay_logo_fade_out: Option<String>,
+    #[serde(default)]
+    pub overlay_logo_fade_out: FilterValue,
     #[ts(type = "string")]
-    #[serde_as(as = "NoneAsEmptyString")]
-    pub overlay_logo: Option<String>,
+    #[serde(default)]
+    pub overlay_logo: FilterValue,
     #[ts(type = "string")]
-    #[serde_as(as = "NoneAsEmptyString")]
-    pub tpad: Option<String>,
+    #[serde(default)]
+    pub tpad: FilterValue,
     #[ts(type = "string")]
-    #[serde_as(as = "NoneAsEmptyString")]
-    pub drawtext_from_file: Option<String>,
+    #[serde(default)]
+    pub drawtext_from_file: FilterValue,
     #[ts(type = "string")]
-    #[serde_as(as = "NoneAsEmptyString")]
-    pub drawtext_from_zmq: Option<String>,
+    #[serde(default)]
+    pub drawtext_from_zmq: FilterValue,
     #[ts(type = "string")]
-    #[serde_as(as = "NoneAsEmptyString")]
-    pub aevalsrc: Option<String>,
+    #[serde(default)]
+    pub aevalsrc: FilterValue,
     #[ts(type = "string")]
-    #[serde_as(as = "NoneAsEmptyString")]
-    pub afade_in: Option<String>,
+    #[serde(default)]
+    pub afade_in: FilterValue,
     #[ts(type = "string")]
-    #[serde_as(as = "NoneAsEmptyString")]
-    pub afade_out: Option<String>,
+    #[serde(default)]
+    pub afade_out: FilterValue,
     #[ts(type = "string")]
-    #[serde_as(as = "NoneAsEmptyString")]
-    pub apad: Option<String>,
+    #[serde(default)]
+    pub apad: FilterValue,
     #[ts(type = "string")]
-    #[serde_as(as = "NoneAsEmptyString")]
-    pub volume: Option<String>,
+    #[serde(default)]
+    pub volume: FilterValue,
     #[ts(type = "string")]
-    #[serde_as(as = "NoneAsEmptyString")]
-    pub split: Option<String>,
+    #[serde(default)]
+    pub split: FilterValue,
 }
 
 impl AdvancedConfig {
@@ -157,27 +245,27 @@ impl AdvancedConfig {
                 },
             },
             filter: FilterConfig {
-                deinterlace: config.filter_deinterlace,
-                pad_video: config.filter_pad_video,
-                fps: config.filter_fps,
-                scale: config.filter_scale,
-                set_dar: config.filter_set_dar,
-                fade_in: config.filter_fade_in,
-                fade_out: config.filter_fade_out,
-                logo: config.filter_logo,
-                overlay_logo_scale: config.filter_overlay_logo_scale,
-                overlay_logo_fade_in: config.filter_overlay_logo_fade_in,
-                overlay_logo_fade_out: config.filter_overlay_logo_fade_out,
-                overlay_logo: config.filter_overlay_logo,
-                tpad: config.filter_tpad,
-                drawtext_from_file: config.filter_drawtext_from_file,
-                drawtext_from_zmq: config.filter_drawtext_from_zmq,
-                aevalsrc: config.filter_aevalsrc,
-                afade_in: config.filter_afade_in,
-                afade_out: config.filter_afade_out,
-                apad: config.filter_apad,
-                volume: config.filter_volume,
-                split: config.filter_split,
+                deinterlace: config.filter_deinterlace.into(),
+                pad_video: config.filter_pad_video.into(),
+                fps: config.filter_fps.into(),
+                scale: config.filter_scale.into(),
+                set_dar: config.filter_set_dar.into(),
+                fade_in: config.filter_fade_in.into(),
+                fade_out: config.filter_fade_out.into(),
+                logo: config.filter_logo.into(),
+                overlay_logo_scale: config.filter_overlay_logo_scale.into(),
+                overlay_logo_fade_in: config.filter_overlay_logo_fade_in.into(),
+                overlay_logo_fade_out: config.filter_overlay_logo_fade_out.into(),
+                overlay_logo: config.filter_overlay_logo.into(),
+                tpad: config.filter_tpad.into(),
+                drawtext_from_file: config.filter_drawtext_from_file.into(),
+                drawtext_from_zmq: config.filter_drawtext_from_zmq.into(),
+                aevalsrc: config.filter_aevalsrc.into(),
+                afade_in: config.filter_afade_in.into(),
+                afade_out: config.filter_afade_out.into(),
+                apad: config.filter_apad.into(),
+                volume: config.filter_volume.into(),
+                split: config.filter_split.into(),
             },
             ingest: IngestConfig {
                 input_param: config.ingest_input_param.clone(),
