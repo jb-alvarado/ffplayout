@@ -294,7 +294,7 @@ impl Filters {
         let mut f_chain = self.video_chain.clone();
      
         if !self.audio_chain.is_empty() {
-            if !f_chain.ends_with(';') && !f_chain.is_empty() {
+            if !f_chain.ends_with(';') {
                 f_chain.push(';');
             }
             f_chain.push_str(&self.audio_chain);
