@@ -1175,10 +1175,12 @@ pub async fn filter_chains(
     }
 
     if !config.processing.audio_only && !config.processing.copy_video {
-        if let Some(probe) = node.probe.as_ref() {
+        let has_video_stream = if let Some(probe) = node.probe.as_ref() {
             if Path::new(&node.audio).is_file() {
                 filters.audio_position = 1;
             }
+            
+            let has_stream = probe.video.first().is_some();
 
             if let Some(v_stream) = &probe.video.first() {
                 let aspect = calc_aspect(config, &v_stream.aspect_ratio);
@@ -1190,16 +1192,21 @@ pub async fn filter_chains(
                 scale(config, &mut filters, v_stream.width, v_stream.height);
                 setdar(config, &mut filters, aspect);
             }
-
-            extend_video(config, &mut filters, node);
+            has_stream
         } else {
             fps(config, &mut filters, 0.0);
             scale(config, &mut filters, None, None);
-        }
+            false
+        };
 
         add_text(config, &mut filters, node, filter_chain).await;
         fade(config, &mut filters, node, 0, Video);
         overlay(config, &mut filters, node);
+
+        if has_video_stream {
+            extend_video(config, &mut filters, node);
+        }
+    
     }
 
     let (proc_vf, proc_af) = if node.unit == Ingest {
