@@ -769,19 +769,28 @@ fn pad(config: &PlayoutConfig, chain: &mut Filters, aspect: f64) {
     let pad = match &config.advanced.filter.pad_video {
         FilterValue::Some(pad_video) => {
             if pad_video.contains("{}:{}") {
-                Some(custom_format(
-                    pad_video,
-                    &[
-                        &config.processing.width.to_string(),
-                        &config.processing.height.to_string(),
-                    ],
-                ))
+                let pair_count = pad_video.matches("{}:{}").count();
+                
+                let mut values = Vec::with_capacity(pair_count * 2);
+                for _ in 0..pair_count {
+                    values.push(config.processing.width.to_string());
+                    values.push(config.processing.height.to_string());
+                }
+                
+                Some(custom_format(pad_video, &values))
             } else {
                 let (numerator, denominator) = fraction(config.processing.aspect, 100);
-                Some(custom_format(
-                    pad_video,
-                    &[&numerator.to_string(), &denominator.to_string()],
-                ))
+                let placeholder_count = pad_video.matches("{}").count();
+
+                let mut values = Vec::with_capacity(placeholder_count);
+                for i in 0..placeholder_count {
+                    if i % 2 == 0 {
+                        values.push(numerator.to_string());
+                    } else {
+                        values.push(denominator.to_string());
+                    }
+                }
+                Some(custom_format(pad_video, &values))
             }
         },
         FilterValue::None => {
