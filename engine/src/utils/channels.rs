@@ -7,7 +7,7 @@ use tokio::sync::Mutex;
 use crate::db::{handles, models::Channel};
 use crate::player::controller::{ChannelController, ChannelManager};
 use crate::utils::{
-    advanced_config::{AdvancedConfig, DecoderConfig, FilterConfig, IngestConfig},
+    advanced_config::{AdvancedConfig, DecoderConfig, FilterConfig, IngestConfig, FilterValue},
     config::get_config,
     errors::ServiceError,
     mail::MailQueue,
@@ -87,10 +87,10 @@ pub async fn create_channel(
                 ..Default::default()
             },
             filter: FilterConfig {
-                deinterlace: Some(NVIDIA_FILTER_DEINTERLACE.to_string()),
-                scale: Some(NVIDIA_FILTER_SCALE.to_string()),
-                overlay_logo_scale: Some(NVIDIA_FILTER_LOGO_SCALE.to_string()),
-                overlay_logo: Some(NVIDIA_FILTER_OVERLAY.to_string()),
+                deinterlace: FilterValue::Some(NVIDIA_FILTER_DEINTERLACE.to_string()),
+                scale: FilterValue::Some(NVIDIA_FILTER_SCALE.to_string()),
+                overlay_logo_scale: FilterValue::Some(NVIDIA_FILTER_LOGO_SCALE.to_string()),
+                overlay_logo: FilterValue::Some(NVIDIA_FILTER_OVERLAY.to_string()),
                 ..Default::default()
             },
             ..Default::default()
@@ -113,11 +113,11 @@ pub async fn create_channel(
                 ..Default::default()
             },
             filter: FilterConfig {
-                deinterlace: Some(QSV_FILTER_DEINTERLACE.to_string()),
-                fps: Some(QSV_FILTER_FPS.to_string()),
-                scale: Some(QSV_FILTER_SCALE.to_string()),
-                overlay_logo_scale: Some(QSV_FILTER_LOGO_SCALE.to_string()),
-                overlay_logo: Some(QSV_FILTER_OVERLAY.to_string()),
+                deinterlace: FilterValue::Some(QSV_FILTER_DEINTERLACE.to_string()),
+                fps: FilterValue::Some(QSV_FILTER_FPS.to_string()),
+                scale: FilterValue::Some(QSV_FILTER_SCALE.to_string()),
+                overlay_logo_scale: FilterValue::Some(QSV_FILTER_LOGO_SCALE.to_string()),
+                overlay_logo: FilterValue::Some(QSV_FILTER_OVERLAY.to_string()),
                 ..Default::default()
             },
             ..Default::default()
