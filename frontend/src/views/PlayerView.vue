@@ -321,7 +321,7 @@ const newSource = ref({
 } as PlaylistItem)
 
 useHead({
-    title: t('button.player'),
+    title: computed(() => t('button.player')),
     bodyAttrs: {
         class: computed(() => {
             if (showPlaylistGenerator.value) return 'overflow-hidden'
