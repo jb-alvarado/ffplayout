@@ -184,7 +184,7 @@ const { i } = storeToRefs(useConfig())
 const { numberToHex, hexToNumber } = stringFormatter()
 
 useHead({
-    title: computed(() => t('button.message')),
+    title: t('button.message'),
 })
 
 interface PresetName {
