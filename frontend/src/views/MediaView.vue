@@ -395,7 +395,7 @@ onMounted(async () => {
 })
 
 useHead({
-    title: computed(() => t('button.media')),
+    title: t('button.media'),
 })
 
 watch([width], () => {
