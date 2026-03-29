@@ -415,7 +415,6 @@ pub fn init_logging(
 
     let logger = Logger::with(builder.build())
         .write_mode(WriteMode::Async)
-        // .format(console_formatter)
         .log_to_writer(Box::new(LogConsole))
         .add_writer("file", file_logger())
         .add_writer("mail", Box::new(LogMailer::new(mail_queues)))
@@ -444,8 +443,6 @@ pub fn log_line(id: i32, line: &str, level: &str) {
         error!(target: Target::file_mail(), channel = id; "<span class=\"log-gray\">[Server]</span> {}", line.replace("[error] ", ""));
     } else if line.contains("[fatal]") {
         error!(target: Target::file_mail(), channel = id; "<span class=\"log-gray\">[Server]</span> {}", line.replace("[fatal] ", ""));
-    } else {
-        warn!(target: Target::file_mail(), channel = id; "<span class=\"log-gray\">[Server]</span> {line}");
     }
 }
 
