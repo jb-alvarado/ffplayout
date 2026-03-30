@@ -57,7 +57,7 @@ onBeforeMount(() => {
 useHead({
     htmlAttrs: {
         lang: computed(() => locale.value),
-        'data-theme': computed(() => (indexStore.darkMode ? 'dark' : 'light')),
+        'data-theme': computed(() => (indexStore.darkMode ? 'ffp-dark' : 'ffp-light')),
     },
 })
 </script>
