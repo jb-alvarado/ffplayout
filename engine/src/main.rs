@@ -22,7 +22,7 @@ use tokio::{
 
 use ffplayout::{
     ARGS,
-    api::routes::*,
+    api::{auth, routes::*},
     db::{db_drop, db_pool, handles, init_globales},
     player::{
         controller::{ChannelController, ChannelManager},
@@ -100,13 +100,13 @@ async fn main() -> Result<(), ProcessError> {
             channel_controllers.write().await.add(manager);
         }
 
-        let (addr, port) = conn
-            .split_once(':')
-            .map(|(a, p)| (a, p.parse::<u16>().ok()))
-            .and_then(|(a, p)| p.map(|p| (a, p)))
-            .ok_or(ProcessError::IO(
-                "<ADRESSE>:<PORT> needed! For example: 127.0.0.1:8787".to_string(),
-            ))?;
+        let listener = TcpListener::bind(args.core.listen.as_deref().unwrap_or("127.0.0.1:8777"))
+            .await
+            .map_err(|e| {
+                error!("Failed to bind TCP listener: {e:?}");
+                NurError::InternalServerError
+            })?;
+
         let controllers = web::Data::from(channel_controllers.clone());
         let queues = web::Data::from(mail_queues);
         let auth_state = web::Data::new(SseAuthState {
@@ -117,6 +117,12 @@ async fn main() -> Result<(), ProcessError> {
         info!("Running ffplayout, listen on http://{conn}");
 
         let db_clone = pool.clone();
+
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await?;
 
         // no 'allow origin' here, give it to the reverse proxy
         HttpServer::new(move || {
@@ -132,7 +138,11 @@ async fn main() -> Result<(), ProcessError> {
                 .app_data(auth_state.clone())
                 .app_data(web::Data::from(Arc::clone(&broadcast_data)))
                 .wrap(logger)
-                .service(web::scope("/auth").service(login).service(refresh))
+                .service(
+                    web::scope("/auth")
+                        .service(auth::login)
+                        .service(auth::refresh),
+                )
                 .service(
                     web::scope("/api")
                         .wrap(auth)

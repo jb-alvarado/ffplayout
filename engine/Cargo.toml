@@ -16,6 +16,7 @@ default = ["embed_frontend"]
 embed_frontend = []
 
 [dependencies]
+axum = { version = "0.8", features = ["multipart", "macros"] }
 actix-files = "0.6"
 actix-multipart = "0.7"
 actix-web = "4"
@@ -39,6 +40,7 @@ futures-util = { version = "0.3", default-features = false, features = ["std"] }
 iana-time-zone = "0.1"
 inquire = "0.9"
 jsonwebtoken = { version = "10", features = ["rust_crypto"] }
+lazy-limit = "1"
 lettre = { version = "0.11", features = [
     "builder",
     "rustls-tls",
@@ -61,7 +63,9 @@ nix = { version = "0.31", features = ["user", "fs"] }
 notify = "8.0"
 notify-debouncer-full = { version = "*", default-features = false }
 path-clean = "1.0"
+protect-axum = "0.2"
 rand = "0.10"
+real = { version = "0.1", features = ["axum"] }
 regex = "1"
 relative-path = "2"
 reqwest = { version = "0.13", default-features = false, features = ["json"] }

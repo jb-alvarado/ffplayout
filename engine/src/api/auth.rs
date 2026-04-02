@@ -1,10 +1,11 @@
-use actix_web::{Error, error::ErrorUnauthorized, http::StatusCode, web};
 use argon2::{Argon2, PasswordVerifier, password_hash::PasswordHash};
+use axum::{Json as AxumJson, extract::State, http::StatusCode, response::IntoResponse};
 use chrono::{TimeDelta, Utc};
 use jsonwebtoken::{self, DecodingKey, EncodingKey, Header, Validation};
 use log::*;
 use serde::{Deserialize, Serialize};
-use sqlx::{Pool, Sqlite};
+use sqlx::SqlitePool;
+use tokio::task;
 
 use crate::{
     db::{GLOBAL_SETTINGS, handles, models::Role, models::User},
@@ -59,40 +60,57 @@ pub async fn encode_jwt(claims: Claims) -> Result<String, ServiceError> {
 }
 
 /// Decode a json web token (JWT)
-pub async fn decode_jwt(token: &str) -> Result<Claims, Error> {
+pub async fn decode_jwt(token: &str) -> Result<Claims, ServiceError> {
     let config = GLOBAL_SETTINGS.get().unwrap();
     let decoding_key = DecodingKey::from_secret(config.secret.clone().unwrap().as_bytes());
     jsonwebtoken::decode::<Claims>(token, &decoding_key, &Validation::default())
         .map(|data| data.claims)
-        .map_err(|e| ErrorUnauthorized(e.to_string()))
+        .map_err(|e| ServiceError::Unauthorized(e.to_string()))
 }
 
-pub async fn authorize(
-    pool: &Pool<Sqlite>,
-    credentials: Credentials,
-) -> Result<(serde_json::Value, StatusCode), ServiceError> {
+/// #### User Handling
+///
+/// **Login**
+///
+/// ```BASH
+/// curl -X POST http://127.0.0.1:8787/auth/login -H "Content-Type: application/json" \
+/// -d '{ "username": "<USER>", "password": "<PASS>" }'
+/// ```
+/// **Response:**
+///
+/// ```JSON
+/// {
+///     "access": "<ACCESS TOKEN>",
+///     "refresh": "<REFRESH TOKEN>"
+/// }
+/// ```
+pub async fn login(
+    State(pool): State<SqlitePool>,
+    AxumJson(credentials): AxumJson<Credentials>,
+) -> Result<impl IntoResponse, ServiceError> {
     let username = credentials.username.clone();
     let password = credentials.password.clone();
 
-    match handles::select_login(pool, &username).await {
+    match handles::select_login(&pool, &username).await {
         Ok(mut user) => {
             if user.username.is_empty() {
                 return Ok((
-                    serde_json::json!({
-                        "detail": "Incorrect credentials!",
-                    }),
                     StatusCode::FORBIDDEN,
-                ));
+                    AxumJson(serde_json::json!({
+                        "detail": "Incorrect credentials!",
+                    })),
+                )
+                    .into_response());
             }
 
-            let role = handles::select_role(pool, &user.role_id.unwrap_or_default()).await?;
+            let role = handles::select_role(&pool, &user.role_id.unwrap_or_default()).await?;
 
             let pass_hash = user.password.clone();
             let cred_password = password.clone();
 
             user.password = String::new();
 
-            let verified_password = web::block(move || {
+            let verified_password = task::spawn_blocking(move || {
                 let hash = PasswordHash::new(&pass_hash)?;
                 Argon2::default().verify_password(cred_password.as_bytes(), &hash)
             })
@@ -106,74 +124,90 @@ pub async fn authorize(
 
                 info!("user {} login, with role: {role}", username);
 
-                Ok((
-                    serde_json::json!({
+                return Ok((
+                    StatusCode::OK,
+                    AxumJson(serde_json::json!({
                         "access": access_token,
                         "refresh": refresh_token,
-                    }),
-                    StatusCode::OK,
-                ))
-            } else {
-                error!("Wrong password for {username}!");
-
-                Ok((
-                    serde_json::json!({
-                        "detail": "Incorrect credentials!",
-                    }),
-                    StatusCode::FORBIDDEN,
-                ))
+                    })),
+                )
+                    .into_response());
             }
+
+            error!("Wrong password for {username}!");
+
+            Ok((
+                StatusCode::FORBIDDEN,
+                AxumJson(serde_json::json!({
+                    "detail": "Incorrect credentials!",
+                })),
+            )
+                .into_response())
         }
         Err(e) => {
             error!("Login {username} failed! {e}");
 
             Ok((
-                serde_json::json!({
-                    "detail": format!("Login {username} failed!"),
-                }),
                 StatusCode::BAD_REQUEST,
-            ))
+                AxumJson(serde_json::json!({
+                    "detail": format!("Login {username} failed!"),
+                })),
+            )
+                .into_response())
         }
     }
 }
 
+/// **Refresh token**
+///
+/// ```BASH
+/// curl -X POST http://127.0.0.1:8787/auth/refresh -H "Content-Type: application/json" \
+/// -d '{ "refresh": "REFRESH TOKEN>" }'
+/// ```
+/// **Response:**
+///
+/// ```JSON
+/// {
+///     "access": "<ACCESS TOKEN>",
+/// }
+/// ```
 pub async fn refresh(
-    pool: &Pool<Sqlite>,
-    data: TokenRefreshRequest,
-) -> Result<(serde_json::Value, StatusCode), ServiceError> {
-    let refresh_token = &data.refresh;
+    State(pool): State<SqlitePool>,
+    AxumJson(data): AxumJson<TokenRefreshRequest>,
+) -> Result<impl IntoResponse, ServiceError> {
+    let refresh_t = &data.refresh;
 
-    match decode_jwt(refresh_token).await {
+    match decode_jwt(refresh_t).await {
         Ok(claims) => {
             let user_id = claims.id;
             let role = claims.role;
 
-            if let Ok(user) = handles::select_user(pool, user_id).await {
+            if let Ok(user) = handles::select_user(&pool, user_id).await {
                 let access_claims = Claims::new(user.clone(), role.clone(), ACCESS_LIFETIME);
                 let access_token = encode_jwt(access_claims).await?;
 
                 info!("user {} refresh, with role: {role}", user.username);
 
                 Ok((
-                    serde_json::json!({
-                        "access": access_token
-                    }),
                     StatusCode::OK,
+                    AxumJson(serde_json::json!({
+                        "access": access_token,
+                    })),
                 ))
             } else {
                 Ok((
-                    serde_json::json!({
-                        "detail": "Invalid user in refresh token",
-                    }),
                     StatusCode::UNAUTHORIZED,
+                    AxumJson(serde_json::json!({
+                        "detail": "Invalid user in refresh token",
+                    })),
                 ))
             }
         }
         Err(_) => Ok((
-            serde_json::json!({
+            StatusCode::FORBIDDEN,
+            AxumJson(serde_json::json!({
                 "detail": "Invalid refresh token",
-            }),
-            StatusCode::BAD_REQUEST,
+            })),
         )),
     }
 }
