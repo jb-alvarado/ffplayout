@@ -1,23 +1,23 @@
 use std::{path::Path, sync::Arc};
 
-use actix_web::{Responder, get, put, web};
-use actix_web_grants::{authorities::AuthDetails, proc_macro::protect};
+use axum::{Extension, Json, extract::Path as AxumPath};
 use sqlx::{Pool, Sqlite};
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::RwLock;
 
 use crate::{
     db::{
         handles,
-        models::{Role, UserMeta},
+        models::{Output, Role},
     },
     file::norm_abs_path,
     player::controller::ChannelController,
     utils::{
         config::{PlayoutConfig, get_config},
         errors::ServiceError,
-        mail::MailQueue,
     },
 };
+
+use super::{AuthUser, MailQueues};
 
 /// **Get Config**
 ///
@@ -26,27 +26,23 @@ use crate::{
 /// ```
 ///
 /// Response is a JSON object
-#[get("/playout/config/{id}")]
-#[protect(
-    any("Role::GlobalAdmin", "Role::ChannelAdmin", "Role::User"),
-    ty = "Role",
-    expr = "user.channels.contains(&*id) || role.has_authority(&Role::GlobalAdmin)"
-)]
-async fn get_playout_config(
-    id: web::Path<i32>,
-    controllers: web::Data<RwLock<ChannelController>>,
-    role: AuthDetails<Role>,
-    user: web::ReqData<UserMeta>,
-) -> Result<impl Responder, ServiceError> {
+pub async fn get_playout_config(
+    AxumPath(id): AxumPath<i32>,
+    Extension(controllers): Extension<Arc<RwLock<ChannelController>>>,
+    user: AuthUser,
+) -> Result<Json<PlayoutConfig>, ServiceError> {
+    user.ensure_any_role(&[Role::GlobalAdmin, Role::ChannelAdmin, Role::User])?;
+    user.ensure_channel_or_admin(id)?;
+
     let manager = {
         let guard = controllers.read().await;
-        guard.get(*id)
+        guard.get(id)
     }
     .ok_or_else(|| ServiceError::BadRequest(format!("Channel {id} not found!")))?;
 
     let config = manager.config.read().await.clone();
 
-    Ok(web::Json(config))
+    Ok(Json(config))
 }
 
 /// **Update Config**
@@ -56,24 +52,20 @@ async fn get_playout_config(
 /// -d { <CONFIG DATA> } -H 'Authorization: Bearer <TOKEN>'
 /// ```
 #[allow(clippy::too_many_arguments)]
-#[put("/playout/config/{id}")]
-#[protect(
-    any("Role::GlobalAdmin", "Role::ChannelAdmin"),
-    ty = "Role",
-    expr = "user.channels.contains(&*id) || role.has_authority(&Role::GlobalAdmin)"
-)]
-async fn update_playout_config(
-    pool: web::Data<Pool<Sqlite>>,
-    id: web::Path<i32>,
-    mut data: web::Json<PlayoutConfig>,
-    controllers: web::Data<RwLock<ChannelController>>,
-    role: AuthDetails<Role>,
-    user: web::ReqData<UserMeta>,
-    mail_queues: web::Data<Mutex<Vec<Arc<Mutex<MailQueue>>>>>,
-) -> Result<impl Responder, ServiceError> {
+pub async fn update_playout_config(
+    Extension(pool): Extension<Pool<Sqlite>>,
+    AxumPath(id): AxumPath<i32>,
+    Extension(controllers): Extension<Arc<RwLock<ChannelController>>>,
+    Extension(mail_queues): Extension<MailQueues>,
+    user: AuthUser,
+    Json(mut data): Json<PlayoutConfig>,
+) -> Result<Json<&'static str>, ServiceError> {
+    user.ensure_any_role(&[Role::GlobalAdmin, Role::ChannelAdmin])?;
+    user.ensure_channel_or_admin(id)?;
+
     let manager = {
         let guard = controllers.read().await;
-        guard.get(*id)
+        guard.get(id)
     }
     .ok_or_else(|| ServiceError::BadRequest(format!("Channel {id} not found!")))?;
     let p = manager.channel.lock().await.storage.clone();
@@ -88,15 +80,15 @@ async fn update_playout_config(
     data.storage.filler = filler;
     data.text.font = font;
 
-    handles::update_output(&pool, data.output.id, *id, &data.output.output_param).await?;
-    handles::update_configuration(&pool, config_id, data.into_inner()).await?;
-    let new_config = get_config(&pool, *id).await?;
+    handles::update_output(&pool, data.output.id, id, &data.output.output_param).await?;
+    handles::update_configuration(&pool, config_id, data).await?;
+    let new_config = get_config(&pool, id).await?;
     let mut queues = mail_queues.lock().await;
 
     for queue in queues.iter_mut() {
         let mut queue_lock = queue.lock().await;
 
-        if queue_lock.id == *id {
+        if queue_lock.id == id {
             if queue_lock.config.recipient != new_config.mail.recipient {
                 queue_lock.clear_raw();
             }
@@ -108,7 +100,7 @@ async fn update_playout_config(
 
     manager.update_config(new_config).await;
 
-    Ok(web::Json("Update success"))
+    Ok(Json("Update success"))
 }
 
 /// **Get Output**
@@ -118,20 +110,16 @@ async fn update_playout_config(
 /// ```
 ///
 /// Response is a JSON object
-#[get("/playout/outputs/{id}")]
-#[protect(
-    any("Role::GlobalAdmin", "Role::ChannelAdmin", "Role::User"),
-    ty = "Role",
-    expr = "user.channels.contains(&*id) || role.has_authority(&Role::GlobalAdmin)"
-)]
-async fn get_playout_outputs(
-    pool: web::Data<Pool<Sqlite>>,
-    id: web::Path<i32>,
-    role: AuthDetails<Role>,
-    user: web::ReqData<UserMeta>,
-) -> Result<impl Responder, ServiceError> {
-    if let Ok(outputs) = handles::select_outputs(&pool, *id).await {
-        return Ok(web::Json(outputs));
+pub async fn get_playout_outputs(
+    Extension(pool): Extension<Pool<Sqlite>>,
+    AxumPath(id): AxumPath<i32>,
+    user: AuthUser,
+) -> Result<Json<Vec<Output>>, ServiceError> {
+    user.ensure_any_role(&[Role::GlobalAdmin, Role::ChannelAdmin, Role::User])?;
+    user.ensure_channel_or_admin(id)?;
+
+    if let Ok(outputs) = handles::select_outputs(&pool, id).await {
+        return Ok(Json(outputs));
     }
 
     Err(ServiceError::InternalServerError)

@@ -1,23 +1,23 @@
 use std::sync::Arc;
 
-use actix_web::{Responder, delete, get, patch, post, web};
-use actix_web_grants::{authorities::AuthDetails, proc_macro::protect};
+use axum::{Extension, Json, extract::Path};
 use sqlx::{Pool, Sqlite};
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::RwLock;
 
 use crate::{
     db::{
         handles,
-        models::{Channel, Role, UserMeta},
+        models::{Channel, Role},
     },
     player::controller::ChannelController,
     utils::{
         channels::{create_channel, delete_channel},
         config::get_config,
         errors::ServiceError,
-        mail::MailQueue,
     },
 };
+
+use super::{AuthUser, MailQueues};
 
 /// #### Settings
 ///
@@ -38,20 +38,16 @@ use crate::{
 ///     "utc_offset": "+120"
 /// }
 /// ```
-#[get("/channel/{id}")]
-#[protect(
-    any("Role::GlobalAdmin", "Role::ChannelAdmin", "Role::User"),
-    ty = "Role",
-    expr = "user.channels.contains(&*id) || role.has_authority(&Role::GlobalAdmin)"
-)]
-async fn get_channel(
-    pool: web::Data<Pool<Sqlite>>,
-    id: web::Path<i32>,
-    role: AuthDetails<Role>,
-    user: web::ReqData<UserMeta>,
-) -> Result<impl Responder, ServiceError> {
+pub async fn get_channel(
+    Extension(pool): Extension<Pool<Sqlite>>,
+    Path(id): Path<i32>,
+    user: AuthUser,
+) -> Result<Json<Channel>, ServiceError> {
+    user.ensure_any_role(&[Role::GlobalAdmin, Role::ChannelAdmin, Role::User])?;
+    user.ensure_channel_or_admin(id)?;
+
     if let Ok(channel) = handles::select_channel(&pool, &id).await {
-        return Ok(web::Json(channel));
+        return Ok(Json(channel));
     }
 
     Err(ServiceError::InternalServerError)
@@ -62,17 +58,14 @@ async fn get_channel(
 /// ```BASH
 /// curl -X GET http://127.0.0.1:8787/api/channels -H "Authorization: Bearer <TOKEN>"
 /// ```
-#[get("/channels")]
-#[protect(
-    any("Role::GlobalAdmin", "Role::ChannelAdmin", "Role::User"),
-    ty = "Role"
-)]
-async fn get_all_channels(
-    pool: web::Data<Pool<Sqlite>>,
-    user: web::ReqData<UserMeta>,
-) -> Result<impl Responder, ServiceError> {
+pub async fn get_all_channels(
+    Extension(pool): Extension<Pool<Sqlite>>,
+    user: AuthUser,
+) -> Result<Json<Vec<Channel>>, ServiceError> {
+    user.ensure_any_role(&[Role::GlobalAdmin, Role::ChannelAdmin, Role::User])?;
+
     if let Ok(channel) = handles::select_related_channels(&pool, Some(user.id)).await {
-        return Ok(web::Json(channel));
+        return Ok(Json(channel));
     }
 
     Err(ServiceError::InternalServerError)
@@ -85,29 +78,25 @@ async fn get_all_channels(
 /// -d '{ "id": 1, "name": "Channel 1", "preview_url": "http://localhost/live/stream.m3u8", "extra_extensions": "jpg,jpeg,png"}' \
 /// -H "Authorization: Bearer <TOKEN>"
 /// ```
-#[patch("/channel/{id}")]
-#[protect(
-    any("Role::GlobalAdmin", "Role::ChannelAdmin"),
-    ty = "Role",
-    expr = "user.channels.contains(&*id) || role.has_authority(&Role::GlobalAdmin)"
-)]
-async fn patch_channel(
-    pool: web::Data<Pool<Sqlite>>,
-    id: web::Path<i32>,
-    data: web::Json<Channel>,
-    controllers: web::Data<RwLock<ChannelController>>,
-    role: AuthDetails<Role>,
-    user: web::ReqData<UserMeta>,
-) -> Result<impl Responder, ServiceError> {
+pub async fn patch_channel(
+    Extension(pool): Extension<Pool<Sqlite>>,
+    Path(id): Path<i32>,
+    Extension(controllers): Extension<Arc<RwLock<ChannelController>>>,
+    user: AuthUser,
+    Json(data): Json<Channel>,
+) -> Result<&'static str, ServiceError> {
+    user.ensure_any_role(&[Role::GlobalAdmin, Role::ChannelAdmin])?;
+    user.ensure_channel_or_admin(id)?;
+
     let manager = {
         let guard = controllers.read().await;
-        guard.get(*id)
+        guard.get(id)
     }
     .ok_or_else(|| ServiceError::BadRequest(format!("Channel {id} not found!")))?;
 
-    let mut data = data.into_inner();
+    let mut data = data;
 
-    if !role.has_authority(&Role::GlobalAdmin) {
+    if !user.is_global_admin() {
         let channel = handles::select_channel(&pool, &id).await?;
 
         data.public = channel.public;
@@ -115,8 +104,8 @@ async fn patch_channel(
         data.storage = channel.storage;
     }
 
-    handles::update_channel(&pool, *id, data.clone()).await?;
-    let new_config = get_config(&pool, *id).await?;
+    handles::update_channel(&pool, id, data.clone()).await?;
+    let new_config = get_config(&pool, id).await?;
 
     manager.update_config(new_config).await;
     manager.update_channel(&data).await;
@@ -131,23 +120,17 @@ async fn patch_channel(
 /// -d '{ "name": "Channel 2", "preview_url": "http://localhost/live/channel2.m3u8", "extra_extensions": "jpg,jpeg,png" }' \
 /// -H "Authorization: Bearer <TOKEN>"
 /// ```
-#[post("/channel/")]
-#[protect("Role::GlobalAdmin", ty = "Role")]
-async fn add_channel(
-    pool: web::Data<Pool<Sqlite>>,
-    data: web::Json<Channel>,
-    controllers: web::Data<RwLock<ChannelController>>,
-    queue: web::Data<Mutex<Vec<Arc<Mutex<MailQueue>>>>>,
-) -> Result<impl Responder, ServiceError> {
-    match create_channel(
-        &pool,
-        controllers.into_inner(),
-        queue.into_inner(),
-        data.into_inner(),
-    )
-    .await
-    {
-        Ok(c) => Ok(web::Json(c)),
+pub async fn add_channel(
+    Extension(pool): Extension<Pool<Sqlite>>,
+    Extension(controllers): Extension<Arc<RwLock<ChannelController>>>,
+    Extension(queue): Extension<MailQueues>,
+    user: AuthUser,
+    Json(data): Json<Channel>,
+) -> Result<Json<Channel>, ServiceError> {
+    user.ensure_any_role(&[Role::GlobalAdmin])?;
+
+    match create_channel(&pool, controllers, queue, data).await {
+        Ok(c) => Ok(Json(c)),
         Err(e) => Err(e),
     }
 }
@@ -157,15 +140,16 @@ async fn add_channel(
 /// ```BASH
 /// curl -X DELETE http://127.0.0.1:8787/api/channel/2 -H "Authorization: Bearer <TOKEN>"
 /// ```
-#[delete("/channel/{id}")]
-#[protect("Role::GlobalAdmin", ty = "Role")]
-async fn remove_channel(
-    pool: web::Data<Pool<Sqlite>>,
-    id: web::Path<i32>,
-    controllers: web::Data<RwLock<ChannelController>>,
-    queue: web::Data<Mutex<Vec<Arc<Mutex<MailQueue>>>>>,
-) -> Result<impl Responder, ServiceError> {
-    delete_channel(&pool, *id, controllers.into_inner(), queue.into_inner()).await?;
+pub async fn remove_channel(
+    Extension(pool): Extension<Pool<Sqlite>>,
+    Path(id): Path<i32>,
+    Extension(controllers): Extension<Arc<RwLock<ChannelController>>>,
+    Extension(queue): Extension<MailQueues>,
+    user: AuthUser,
+) -> Result<Json<&'static str>, ServiceError> {
+    user.ensure_any_role(&[Role::GlobalAdmin])?;
 
-    Ok(web::Json("Delete Channel Success"))
+    delete_channel(&pool, id, controllers, queue).await?;
+
+    Ok(Json("Delete Channel Success"))
 }

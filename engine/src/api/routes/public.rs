@@ -1,11 +1,15 @@
-use actix_files;
-use actix_web::{
-    get,
-    http::header::{ContentDisposition, DispositionType},
-    web,
+use axum::{
+    Extension,
+    body::Body,
+    extract::Path,
+    http::{
+        HeaderMap, StatusCode,
+        header::{CONTENT_DISPOSITION, CONTENT_TYPE},
+    },
+    response::{IntoResponse, Response},
 };
 use path_clean::PathClean;
-use tokio::sync::RwLock;
+use tokio::{fs, sync::RwLock};
 
 use crate::{
     player::controller::ChannelController,
@@ -19,13 +23,10 @@ use crate::{
 /// ```BASH
 /// curl -X GET http://127.0.0.1:8787/1/live/stream.m3u8
 /// ```
-#[get("/{id}/{public:live|preview|public}/{file_stem:.*}")]
-async fn get_public(
-    path: web::Path<(i32, String, String)>,
-    controllers: web::Data<RwLock<ChannelController>>,
-) -> Result<actix_files::NamedFile, ServiceError> {
-    let (id, public, file_stem) = path.into_inner();
-
+pub async fn get_public(
+    Path((id, public, file_stem)): Path<(i32, String, String)>,
+    Extension(controllers): Extension<std::sync::Arc<RwLock<ChannelController>>>,
+) -> Result<Response, ServiceError> {
     let absolute_path = if file_stem.ends_with(".ts")
         || file_stem.ends_with(".m3u8")
         || file_stem.ends_with(".vtt")
@@ -44,12 +45,11 @@ async fn get_public(
     .clean();
 
     let path = absolute_path.join(file_stem.as_str());
-    let file = actix_files::NamedFile::open(path)?;
+    let bytes = fs::read(path).await?;
 
-    Ok(file
-        .use_last_modified(true)
-        .set_content_disposition(ContentDisposition {
-            disposition: DispositionType::Attachment,
-            parameters: vec![],
-        }))
+    let mut headers = HeaderMap::new();
+    headers.insert(CONTENT_TYPE, "application/octet-stream".parse().unwrap());
+    headers.insert(CONTENT_DISPOSITION, "attachment".parse().unwrap());
+
+    Ok((StatusCode::OK, headers, Body::from(bytes)).into_response())
 }

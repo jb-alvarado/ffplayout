@@ -130,7 +130,6 @@ pub async fn generate_from_template(
     template: Template,
 ) -> FolderSource {
     let mut media_list = vec![];
-    let mut rng = rng();
     let mut index: usize = 0;
     let id = config.general.channel_id;
 
@@ -166,6 +165,7 @@ pub async fn generate_from_template(
         }
 
         let mut timed_list = if source.shuffle {
+            let mut rng = rng();
             source_list.shuffle(&mut rng);
 
             random_list(source_list, duration)

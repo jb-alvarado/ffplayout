@@ -17,13 +17,6 @@ embed_frontend = []
 
 [dependencies]
 axum = { version = "0.8", features = ["multipart", "macros"] }
-actix-files = "0.6"
-actix-multipart = "0.7"
-actix-web = "4"
-actix-web-grants = "4"
-actix-web-httpauth = "0.8"
-actix-web-lab = "0.26"
-actix-web-static-files = { version = "4", features = ["static-files-03"] }
 argon2 = "0.5"
 async-walkdir = "2"
 chrono = { version = "0.4", default-features = false, features = [

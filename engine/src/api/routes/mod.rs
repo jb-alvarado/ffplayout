@@ -1,9 +1,19 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
+use axum::{
+    Json,
+    extract::FromRequestParts,
+    http::{StatusCode, header::AUTHORIZATION, request::Parts},
+};
 use chrono::{Datelike, NaiveDateTime, TimeZone, Utc};
 use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
+use tokio::sync::Mutex;
 
+use super::auth::decode_jwt;
+use crate::db::models::Role;
+use crate::utils::mail::MailQueue;
 use crate::utils::{config::Template, naive_date_time_from_str};
 
 mod channel;
@@ -32,6 +42,103 @@ pub use public::*;
 pub use system::*;
 pub use user::*;
 
+pub type MailQueues = Arc<Mutex<Vec<Arc<Mutex<MailQueue>>>>>;
+
+#[derive(Clone, Debug)]
+pub struct AuthUser {
+    pub id: i32,
+    pub channels: Vec<i32>,
+    pub role: Role,
+}
+
+impl AuthUser {
+    pub fn is_global_admin(&self) -> bool {
+        self.role == Role::GlobalAdmin
+    }
+
+    pub fn ensure_any_role(
+        &self,
+        roles: &[Role],
+    ) -> Result<(), crate::utils::errors::ServiceError> {
+        if roles.contains(&self.role) {
+            Ok(())
+        } else {
+            Err(crate::utils::errors::ServiceError::Forbidden(
+                "Insufficient permissions".to_string(),
+            ))
+        }
+    }
+
+    pub fn ensure_channel_or_admin(
+        &self,
+        channel_id: i32,
+    ) -> Result<(), crate::utils::errors::ServiceError> {
+        if self.is_global_admin() || self.channels.contains(&channel_id) {
+            Ok(())
+        } else {
+            Err(crate::utils::errors::ServiceError::Forbidden(
+                "Forbidden for channel".to_string(),
+            ))
+        }
+    }
+
+    pub fn ensure_self_or_admin(
+        &self,
+        user_id: i32,
+    ) -> Result<(), crate::utils::errors::ServiceError> {
+        if self.is_global_admin() || self.id == user_id {
+            Ok(())
+        } else {
+            Err(crate::utils::errors::ServiceError::Forbidden(
+                "Forbidden for user".to_string(),
+            ))
+        }
+    }
+}
+
+impl<S> FromRequestParts<S> for AuthUser
+where
+    S: Send + Sync,
+{
+    type Rejection = (StatusCode, Json<serde_json::Value>);
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        let Some(value) = parts.headers.get(AUTHORIZATION) else {
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({ "detail": "Missing authorization header" })),
+            ));
+        };
+
+        let Ok(token) = value.to_str() else {
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({ "detail": "Invalid authorization header" })),
+            ));
+        };
+
+        let Some(token) = token.strip_prefix("Bearer ") else {
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({ "detail": "Missing bearer token" })),
+            ));
+        };
+
+        let claims = decode_jwt(token).await.map_err(|e| {
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({ "detail": e.to_string() })),
+            )
+        })?;
+
+        Ok(Self {
+            id: claims.id,
+            channels: claims.channels,
+            role: claims.role,
+        })
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 pub struct DateObj {
     #[serde(default)]
@@ -46,7 +153,7 @@ pub struct PathsObj {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-struct FileObj {
+pub struct FileObj {
     #[serde(default)]
     path: PathBuf,
 }
@@ -96,7 +203,7 @@ fn time_before() -> NaiveDateTime {
 }
 
 #[derive(Debug, Serialize)]
-struct ProgramItem {
+pub struct ProgramItem {
     source: String,
     start: String,
     title: Option<String>,

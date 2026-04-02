@@ -1,11 +1,12 @@
 use std::{
+    convert::Infallible,
     sync::{Arc, atomic::Ordering},
     time::Duration,
 };
 
-use actix_web_lab::{
-    sse::{self, Sse},
-    util::InfallibleStream,
+use axum::response::{
+    IntoResponse,
+    sse::{Event, KeepAlive, Sse},
 };
 use tokio::{
     sync::{Mutex, mpsc},
@@ -21,11 +22,15 @@ use crate::utils::system::SystemStat;
 struct Client {
     manager: ChannelManager,
     endpoint: Endpoint,
-    sender: mpsc::Sender<sse::Event>,
+    sender: mpsc::Sender<Result<Event, Infallible>>,
 }
 
 impl Client {
-    fn new(manager: ChannelManager, endpoint: Endpoint, sender: mpsc::Sender<sse::Event>) -> Self {
+    fn new(
+        manager: ChannelManager,
+        endpoint: Endpoint,
+        sender: mpsc::Sender<Result<Event, Infallible>>,
+    ) -> Self {
         Self {
             manager,
             endpoint,
@@ -76,15 +81,17 @@ impl Broadcaster {
         &self,
         manager: ChannelManager,
         endpoint: Endpoint,
-    ) -> Sse<InfallibleStream<ReceiverStream<sse::Event>>> {
+    ) -> impl IntoResponse {
         let (tx, rx) = mpsc::channel(10);
 
-        tx.send(sse::Data::new("connected").into()).await.unwrap();
+        tx.send(Ok(Event::default().data("connected")))
+            .await
+            .unwrap();
 
         let client = Client::new(manager, endpoint, tx);
         self.inner.lock().await.clients.push(client);
 
-        Sse::from_infallible_receiver(rx)
+        Sse::new(ReceiverStream::new(rx)).keep_alive(KeepAlive::default())
     }
 
     pub async fn broadcast(&self) {
@@ -105,7 +112,7 @@ impl Broadcaster {
 
                     if client
                         .sender
-                        .send(sse::Data::new(message).into())
+                        .send(Ok(Event::default().data(message)))
                         .await
                         .is_err()
                     {
@@ -118,7 +125,7 @@ impl Broadcaster {
 
                     if client
                         .sender
-                        .send(sse::Data::new(stat.to_string()).into())
+                        .send(Ok(Event::default().data(stat.to_string())))
                         .await
                         .is_err()
                     {

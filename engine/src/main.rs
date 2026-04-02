@@ -1,34 +1,22 @@
-use std::{
-    collections::HashSet,
-    sync::{Arc, atomic::AtomicBool},
-    thread,
-};
+use std::sync::{Arc, atomic::AtomicBool};
 
-use actix_web::{App, HttpServer, middleware::Logger, web};
-use actix_web_httpauth::middleware::HttpAuthentication;
-
-#[cfg(any(debug_assertions, not(feature = "embed_frontend")))]
-use actix_files::Files;
-
-#[cfg(all(not(debug_assertions), feature = "embed_frontend"))]
-use actix_web_static_files::ResourceFiles;
-
+use axum::{Extension, Router};
 use log::*;
 use tokio::{
     fs::File,
     io::AsyncReadExt,
+    net::TcpListener,
     sync::{Mutex, RwLock},
 };
 
 use ffplayout::{
-    ARGS,
-    api::{auth, routes::*},
+    ARGS, api,
     db::{db_drop, db_pool, handles, init_globales},
     player::{
         controller::{ChannelController, ChannelManager},
         utils::{JsonPlaylist, get_date, is_remote, json_validate::validate_playlist},
     },
-    sse::{SseAuthState, broadcast::Broadcaster, routes::*},
+    sse::{SseAuthState, broadcast::Broadcaster},
     utils::{
         args_parse::init_args,
         config::get_config,
@@ -38,22 +26,7 @@ use ffplayout::{
         playlist::generate_playlist,
         time_machine::set_mock_time,
     },
-    validator,
 };
-
-#[cfg(any(debug_assertions, not(feature = "embed_frontend")))]
-use ffplayout::utils::public_path;
-
-#[cfg(all(not(debug_assertions), feature = "embed_frontend"))]
-include!(concat!(env!("OUT_DIR"), "/generated.rs"));
-
-fn thread_counter() -> usize {
-    let available_threads = thread::available_parallelism()
-        .map(std::num::NonZero::get)
-        .unwrap_or(1);
-
-    (available_threads / 2).max(2)
-}
 
 #[tokio::main]
 async fn main() -> Result<(), ProcessError> {
@@ -69,15 +42,15 @@ async fn main() -> Result<(), ProcessError> {
     set_mock_time(&ARGS.fake_time)?;
     init_globales(&pool).await?;
 
-    // logger handle should be kept alive until the end
-    let _logger = init_logging(mail_queues.clone());
+    // Logger handle should be kept alive until the end.
+    let _logger = init_logging(mail_queues.clone())?;
 
     let channel_controllers = Arc::new(RwLock::new(ChannelController::new()));
 
     if let Some(conn) = &ARGS.listen {
         let channels = handles::select_related_channels(&pool, None).await?;
 
-        for channel in channels.into_iter() {
+        for channel in channels {
             let config = get_config(&pool, channel.id).await?;
             let m_queue = Arc::new(Mutex::new(MailQueue::new(channel.id, config.mail.clone())));
             let channel_active = channel.active;
@@ -86,7 +59,7 @@ async fn main() -> Result<(), ProcessError> {
             if init {
                 if let Err(e) = manager.storage.copy_assets().await {
                     error!("{e}");
-                };
+                }
 
                 init = false;
             }
@@ -100,122 +73,26 @@ async fn main() -> Result<(), ProcessError> {
             channel_controllers.write().await.add(manager);
         }
 
-        let listener = TcpListener::bind(args.core.listen.as_deref().unwrap_or("127.0.0.1:8777"))
+        let listener = TcpListener::bind(conn)
             .await
-            .map_err(|e| {
-                error!("Failed to bind TCP listener: {e:?}");
-                NurError::InternalServerError
-            })?;
+            .map_err(|e| ProcessError::Input(format!("Failed to bind {conn}: {e}")))?;
 
-        let controllers = web::Data::from(channel_controllers.clone());
-        let queues = web::Data::from(mail_queues);
-        let auth_state = web::Data::new(SseAuthState {
-            uuids: Mutex::new(HashSet::new()),
-        });
+        let auth_state = Arc::new(SseAuthState::default());
         let broadcast_data = Broadcaster::create();
+
+        let app = Router::new()
+            .merge(api::path::routes(pool.clone()))
+            .layer(Extension(pool.clone()))
+            .layer(Extension(mail_queues.clone()))
+            .layer(Extension(channel_controllers.clone()))
+            .layer(Extension(auth_state))
+            .layer(Extension(broadcast_data));
 
         info!("Running ffplayout, listen on http://{conn}");
 
-        let db_clone = pool.clone();
-
-        axum::serve(
-            listener,
-            app.into_make_service_with_connect_info::<SocketAddr>(),
-        )
-        .await?;
-
-        // no 'allow origin' here, give it to the reverse proxy
-        HttpServer::new(move || {
-            let auth = HttpAuthentication::bearer(validator);
-            let db_pool = web::Data::new(db_clone.clone());
-            // Customize logging format to get IP though proxies.
-            let logger = Logger::new("%{r}a \"%r\" %s %b \"%{Referer}i\" \"%{User-Agent}i\" %T");
-
-            let mut web_app = App::new()
-                .app_data(db_pool)
-                .app_data(queues.clone())
-                .app_data(controllers.clone())
-                .app_data(auth_state.clone())
-                .app_data(web::Data::from(Arc::clone(&broadcast_data)))
-                .wrap(logger)
-                .service(
-                    web::scope("/auth")
-                        .service(auth::login)
-                        .service(auth::refresh),
-                )
-                .service(
-                    web::scope("/api")
-                        .wrap(auth)
-                        .service(add_user)
-                        .service(get_user)
-                        .service(get_by_name)
-                        .service(get_users)
-                        .service(remove_user)
-                        .service(add_advanced_config)
-                        .service(get_advanced_config)
-                        .service(get_related_advanced_config)
-                        .service(remove_related_advanced_config)
-                        .service(update_advanced_config)
-                        .service(get_playout_config)
-                        .service(update_playout_config)
-                        .service(get_playout_outputs)
-                        .service(add_preset)
-                        .service(get_presets)
-                        .service(update_preset)
-                        .service(delete_preset)
-                        .service(get_channel)
-                        .service(get_all_channels)
-                        .service(patch_channel)
-                        .service(add_channel)
-                        .service(remove_channel)
-                        .service(update_user)
-                        .service(send_text_message)
-                        .service(control_playout)
-                        .service(media_current)
-                        .service(process_control)
-                        .service(get_playlist)
-                        .service(save_playlist)
-                        .service(gen_playlist)
-                        .service(del_playlist)
-                        .service(get_log)
-                        .service(file_browser)
-                        .service(add_dir)
-                        .service(move_rename)
-                        .service(remove)
-                        .service(save_file)
-                        .service(import_playlist)
-                        .service(get_program)
-                        .service(get_system_stat)
-                        .service(generate_uuid),
-                )
-                .service(
-                    web::scope("/data")
-                        .service(validate_uuid)
-                        .service(event_stream),
-                )
-                .service(get_file)
-                .service(get_public);
-
-            #[cfg(all(not(debug_assertions), feature = "embed_frontend"))]
-            {
-                // in release mode embed frontend
-                let generated = generate();
-                web_app =
-                    web_app.service(ResourceFiles::new("/", generated).resolve_not_found_to_root());
-            }
-
-            #[cfg(any(debug_assertions, not(feature = "embed_frontend")))]
-            {
-                // in debug mode get frontend from path
-                web_app = web_app.service(Files::new("/", public_path()).index_file("index.html"));
-            }
-
-            web_app
-        })
-        .bind((addr, port))?
-        .workers(thread_counter())
-        .run()
-        .await?;
+        axum::serve(listener, app)
+            .await
+            .map_err(|e| ProcessError::Custom(e.to_string()))?;
     } else if ARGS.drop_db {
         db_drop().await;
     } else if let Some(channel_ids) = &ARGS.channel {
@@ -232,11 +109,11 @@ async fn main() -> Result<(), ProcessError> {
 
                 manager.foreground_start(index).await?;
             } else if ARGS.generate.is_some() {
-                // run a simple playlist generator and save them to disk
+                // Run a simple playlist generator and save it to disk.
                 generate_playlist(manager).await?;
             } else if ARGS.validate {
                 let mut playlist_path = config.channel.playlists.clone();
-                let start_sec = config.playlist.start_sec.unwrap();
+                let start_sec = config.playlist.start_sec.unwrap_or_default();
                 let date = get_date(false, start_sec, false, &config.channel.timezone);
 
                 if playlist_path.is_dir() || is_remote(&playlist_path.to_string_lossy()) {
@@ -274,11 +151,7 @@ async fn main() -> Result<(), ProcessError> {
         }
     } else {
         error!(
-            "Run ffplayout with correct parameters! For example:
-            -l 127.0.0.1
-            --channel 1 2 --foreground
-            --channel 1 --generate 2025-01-20 - 2025-01-25
-        Run ffplayout -h for more information."
+            "Run ffplayout with correct parameters! For example:\n            -l 127.0.0.1\n            --channel 1 2 --foreground\n            --channel 1 --generate 2025-01-20 - 2025-01-25\n        Run ffplayout -h for more information."
         );
     }
 

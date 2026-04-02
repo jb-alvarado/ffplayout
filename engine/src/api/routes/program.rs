@@ -1,5 +1,7 @@
-use actix_web::{Responder, get, web};
-use actix_web_grants::{authorities::AuthDetails, proc_macro::protect};
+use axum::{
+    Extension, Json,
+    extract::{Path, Query},
+};
 use chrono::{DateTime, Datelike, Local, NaiveDateTime, TimeDelta, TimeZone};
 use log::*;
 use regex::Regex;
@@ -7,7 +9,7 @@ use tokio::sync::RwLock;
 
 use crate::{
     api::routes::{ProgramItem, ProgramObj},
-    db::models::{Role, UserMeta},
+    db::models::Role,
     player::{
         controller::ChannelController,
         utils::{get_date_range, sec_to_time, time_to_sec},
@@ -15,6 +17,8 @@ use crate::{
     utils::{errors::ServiceError, playlist::read_playlist},
     vec_strings,
 };
+
+use super::AuthUser;
 
 /// **Program info**
 ///
@@ -38,22 +42,18 @@ use crate::{
 /// curl -X GET http://127.0.0.1:8787/api/program/1/?start_after=2022-11-13T10:00:00 \
 /// -H 'Authorization: Bearer <TOKEN>'
 /// ```
-#[get("/program/{id}/")]
-#[protect(
-    any("Role::GlobalAdmin", "Role::ChannelAdmin", "Role::User"),
-    ty = "Role",
-    expr = "user.channels.contains(&*id) || role.has_authority(&Role::GlobalAdmin)"
-)]
-async fn get_program(
-    id: web::Path<i32>,
-    obj: web::Query<ProgramObj>,
-    controllers: web::Data<RwLock<ChannelController>>,
-    role: AuthDetails<Role>,
-    user: web::ReqData<UserMeta>,
-) -> Result<impl Responder, ServiceError> {
+pub async fn get_program(
+    Path(id): Path<i32>,
+    Query(obj): Query<ProgramObj>,
+    Extension(controllers): Extension<std::sync::Arc<RwLock<ChannelController>>>,
+    user: AuthUser,
+) -> Result<Json<Vec<ProgramItem>>, ServiceError> {
+    user.ensure_any_role(&[Role::GlobalAdmin, Role::ChannelAdmin, Role::User])?;
+    user.ensure_channel_or_admin(id)?;
+
     let manager = {
         let guard = controllers.read().await;
-        guard.get(*id)
+        guard.get(id)
     }
     .ok_or_else(|| ServiceError::BadRequest(format!("Channel {id} not found!")))?;
 
@@ -135,5 +135,5 @@ async fn get_program(
         }
     }
 
-    Ok(web::Json(program))
+    Ok(Json(program))
 }

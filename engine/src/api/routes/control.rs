@@ -1,12 +1,11 @@
 use std::sync::atomic::Ordering;
 
-use actix_web::{Responder, get, post, web};
-use actix_web_grants::{authorities::AuthDetails, proc_macro::protect};
+use axum::{Extension, Json, extract::Path};
 use sqlx::{Pool, Sqlite};
 use tokio::sync::RwLock;
 
 use crate::{
-    db::models::{Role, UserMeta},
+    db::models::Role,
     player::{controller::ChannelController, utils::get_data_map},
     utils::{
         TextFilter,
@@ -14,6 +13,8 @@ use crate::{
         errors::ServiceError,
     },
 };
+
+use super::AuthUser;
 
 /// ### ffplayout controlling
 ///
@@ -30,27 +31,23 @@ use crate::{
 /// -H 'Content-Type: application/json' -H 'Authorization: Bearer <TOKEN>' \
 /// -d '{"text": "Hello from ffplayout", "x": "(w-text_w)/2", "y": "(h-text_h)/2", fontsize": "24", "line_spacing": "4", "fontcolor": "#ffffff", "box": "1", "boxcolor": "#000000", "boxborderw": "4", "alpha": "1.0"}'
 /// ```
-#[post("/control/{id}/text/")]
-#[protect(
-    any("Role::GlobalAdmin", "Role::ChannelAdmin", "Role::User"),
-    ty = "Role",
-    expr = "user.channels.contains(&*id) || role.has_authority(&Role::GlobalAdmin)"
-)]
 pub async fn send_text_message(
-    id: web::Path<i32>,
-    data: web::Json<TextFilter>,
-    controllers: web::Data<RwLock<ChannelController>>,
-    role: AuthDetails<Role>,
-    user: web::ReqData<UserMeta>,
-) -> Result<impl Responder, ServiceError> {
+    Path(id): Path<i32>,
+    Extension(controllers): Extension<std::sync::Arc<RwLock<ChannelController>>>,
+    user: AuthUser,
+    Json(data): Json<TextFilter>,
+) -> Result<Json<serde_json::Map<String, serde_json::Value>>, ServiceError> {
+    user.ensure_any_role(&[Role::GlobalAdmin, Role::ChannelAdmin, Role::User])?;
+    user.ensure_channel_or_admin(id)?;
+
     let manager = {
         let guard = controllers.read().await;
-        guard.get(*id)
+        guard.get(id)
     }
     .ok_or_else(|| ServiceError::BadRequest(format!("Channel {id} not found!")))?;
 
-    match send_message(manager, data.into_inner()).await {
-        Ok(res) => Ok(web::Json(res)),
+    match send_message(manager, data).await {
+        Ok(res) => Ok(Json(res)),
         Err(e) => Err(e),
     }
 }
@@ -65,23 +62,19 @@ pub async fn send_text_message(
 /// curl -X POST http://127.0.0.1:8787/api/control/1/playout/ -H 'Content-Type: application/json'
 /// -d '{ "command": "reset" }' -H 'Authorization: Bearer <TOKEN>'
 /// ```
-#[post("/control/{id}/playout/")]
-#[protect(
-    any("Role::GlobalAdmin", "Role::ChannelAdmin", "Role::User"),
-    ty = "Role",
-    expr = "user.channels.contains(&*id) || role.has_authority(&Role::GlobalAdmin)"
-)]
 pub async fn control_playout(
-    pool: web::Data<Pool<Sqlite>>,
-    id: web::Path<i32>,
-    control: web::Json<ControlParams>,
-    controllers: web::Data<RwLock<ChannelController>>,
-    role: AuthDetails<Role>,
-    user: web::ReqData<UserMeta>,
-) -> Result<impl Responder, ServiceError> {
+    Extension(pool): Extension<Pool<Sqlite>>,
+    Path(id): Path<i32>,
+    Extension(controllers): Extension<std::sync::Arc<RwLock<ChannelController>>>,
+    user: AuthUser,
+    Json(control): Json<ControlParams>,
+) -> Result<Json<serde_json::Map<String, serde_json::Value>>, ServiceError> {
+    user.ensure_any_role(&[Role::GlobalAdmin, Role::ChannelAdmin, Role::User])?;
+    user.ensure_channel_or_admin(id)?;
+
     let manager = {
         let guard = controllers.read().await;
-        guard.get(*id)
+        guard.get(id)
     }
     .ok_or_else(|| ServiceError::BadRequest(format!("Channel {id} not found!")))?;
 
@@ -94,7 +87,7 @@ pub async fn control_playout(
     manager.is_processing.store(true, Ordering::SeqCst);
 
     let resp = match control_state(&pool, &manager, &control.control).await {
-        Ok(res) => Ok(web::Json(res)),
+        Ok(res) => Ok(Json(res)),
         Err(e) => Err(e),
     };
 
@@ -127,27 +120,23 @@ pub async fn control_playout(
 ///       "played": 67.808
 ///     }
 /// ```
-#[get("/control/{id}/media/current")]
-#[protect(
-    any("Role::GlobalAdmin", "Role::ChannelAdmin", "Role::User"),
-    ty = "Role",
-    expr = "user.channels.contains(&*id) || role.has_authority(&Role::GlobalAdmin)"
-)]
 pub async fn media_current(
-    id: web::Path<i32>,
-    controllers: web::Data<RwLock<ChannelController>>,
-    role: AuthDetails<Role>,
-    user: web::ReqData<UserMeta>,
-) -> Result<impl Responder, ServiceError> {
+    Path(id): Path<i32>,
+    Extension(controllers): Extension<std::sync::Arc<RwLock<ChannelController>>>,
+    user: AuthUser,
+) -> Result<Json<serde_json::Map<String, serde_json::Value>>, ServiceError> {
+    user.ensure_any_role(&[Role::GlobalAdmin, Role::ChannelAdmin, Role::User])?;
+    user.ensure_channel_or_admin(id)?;
+
     let manager = {
         let guard = controllers.read().await;
-        guard.get(*id)
+        guard.get(id)
     }
     .ok_or_else(|| ServiceError::BadRequest(format!("Channel {id} not found!")))?;
 
     let media_map = get_data_map(&manager).await;
 
-    Ok(web::Json(media_map))
+    Ok(Json(media_map))
 }
 
 /// #### ffplayout Process Control
@@ -163,22 +152,18 @@ pub async fn media_current(
 /// -H 'Content-Type: application/json' -H 'Authorization: Bearer <TOKEN>'
 /// -d '{"command": "start"}'
 /// ```
-#[post("/control/{id}/process/")]
-#[protect(
-    any("Role::GlobalAdmin", "Role::ChannelAdmin", "Role::User"),
-    ty = "Role",
-    expr = "user.channels.contains(&*id) || role.has_authority(&Role::GlobalAdmin)"
-)]
 pub async fn process_control(
-    id: web::Path<i32>,
-    proc: web::Json<Process>,
-    controllers: web::Data<RwLock<ChannelController>>,
-    role: AuthDetails<Role>,
-    user: web::ReqData<UserMeta>,
-) -> Result<impl Responder, ServiceError> {
+    Path(id): Path<i32>,
+    Extension(controllers): Extension<std::sync::Arc<RwLock<ChannelController>>>,
+    user: AuthUser,
+    Json(proc): Json<Process>,
+) -> Result<Json<&'static str>, ServiceError> {
+    user.ensure_any_role(&[Role::GlobalAdmin, Role::ChannelAdmin, Role::User])?;
+    user.ensure_channel_or_admin(id)?;
+
     let manager = {
         let guard = controllers.read().await;
-        guard.get(*id)
+        guard.get(id)
     }
     .ok_or_else(|| ServiceError::BadRequest(format!("Channel {id} not found!")))?;
 
@@ -192,14 +177,14 @@ pub async fn process_control(
 
     manager.is_processing.store(true, Ordering::SeqCst);
 
-    match proc.into_inner().command {
+    match proc.command {
         ProcessCtl::Status => {
             manager.is_processing.store(false, Ordering::SeqCst);
 
             if manager.is_alive.load(Ordering::SeqCst) {
-                return Ok(web::Json("active"));
+                return Ok(Json("active"));
             }
-            return Ok(web::Json("not running"));
+            return Ok(Json("not running"));
         }
         ProcessCtl::Start => {
             if !manager.is_alive.load(Ordering::SeqCst) {
@@ -224,5 +209,5 @@ pub async fn process_control(
 
     manager.is_processing.store(false, Ordering::SeqCst);
 
-    Ok(web::Json("Success"))
+    Ok(Json("Success"))
 }

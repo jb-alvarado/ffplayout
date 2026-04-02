@@ -73,7 +73,7 @@ fn get_date_tomorrow() {
     assert_eq!("2022-05-21".to_string(), date);
 }
 
-#[actix_web::test]
+#[tokio::test]
 #[serial]
 #[ignore]
 async fn test_delta() {

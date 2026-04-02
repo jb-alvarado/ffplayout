@@ -1,10 +1,10 @@
-use actix_web::web;
 use argon2::{
     Argon2, PasswordHasher,
     password_hash::{SaltString, rand_core::OsRng},
 };
 use rand::{RngExt, distr::Alphanumeric};
 use sqlx::{Pool, Row, Sqlite, sqlite::SqliteQueryResult};
+use tokio::task;
 
 use super::models::{AdvancedConfiguration, Configuration};
 use crate::db::models::{Channel, GlobalSettings, Output, Role, TextPreset, User};
@@ -568,7 +568,7 @@ pub async fn insert_user(conn: &Pool<Sqlite>, user: User) -> Result<(), ServiceE
     const QUERY: &str =
         "INSERT INTO user (mail, username, password, role_id) VALUES($1, $2, $3, $4) RETURNING id";
 
-    let password_hash = web::block(move || {
+    let password_hash = task::spawn_blocking(move || {
         let salt = SaltString::generate(&mut OsRng);
         let hash = Argon2::default()
             .hash_password(user.password.as_bytes(), &salt)
@@ -595,7 +595,7 @@ pub async fn insert_user(conn: &Pool<Sqlite>, user: User) -> Result<(), ServiceE
 }
 
 pub async fn insert_or_update_user(conn: &Pool<Sqlite>, user: User) -> Result<(), ServiceError> {
-    let password_hash = web::block(move || {
+    let password_hash = task::spawn_blocking(move || {
         let salt = SaltString::generate(&mut OsRng);
         let hash = Argon2::default()
             .hash_password(user.password.as_bytes(), &salt)

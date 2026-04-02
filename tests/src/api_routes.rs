@@ -1,7 +1,13 @@
-use actix_web::{App, Error, HttpResponse, Responder, get, web};
+use axum::{
+    Router,
+    body::Body,
+    http::{Request, StatusCode},
+    routing::{get, post},
+};
 
 use serde_json::json;
 use sqlx::{Pool, Sqlite, sqlite::SqlitePoolOptions};
+use tower::util::ServiceExt;
 
 use ffplayout::api::auth::login;
 use ffplayout::db::{handles, init_globales, models::User};
@@ -45,49 +51,79 @@ async fn prepare_config() -> (PlayoutConfig, ChannelManager, Pool<Sqlite>) {
     (config, manager, pool)
 }
 
-#[get("/")]
-async fn get_handler() -> Result<impl Responder, Error> {
-    Ok(HttpResponse::Ok())
+async fn get_handler() -> StatusCode {
+    StatusCode::OK
 }
 
-#[actix_web::test]
+#[tokio::test]
 async fn test_get() {
-    let srv = actix_test::start(|| App::new().service(get_handler));
+    let app = Router::new().route("/", get(get_handler));
 
-    let req = srv.get("/");
-    let res = req.send().await.unwrap();
+    let res = app
+        .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
 
     assert!(res.status().is_success());
 }
 
-#[actix_web::test]
+#[tokio::test]
 async fn test_login() {
     let (_, _, pool) = prepare_config().await;
 
     init_globales(&pool).await.unwrap();
 
-    let srv = actix_test::start(move || {
-        let db_pool = web::Data::new(pool.clone());
-        App::new()
-            .app_data(db_pool)
-            .service(web::scope("/auth").service(login))
-    });
+    let app = Router::new()
+        .route("/auth/login", post(login))
+        .with_state(pool.clone());
 
     let payload = json!({"username": "admin", "password": "admin"});
 
-    let res = srv.post("/auth/login/").send_json(&payload).await.unwrap();
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/auth/login")
+                .header("content-type", "application/json")
+                .body(Body::from(payload.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
 
     assert!(res.status().is_success());
 
     let payload = json!({"username": "admin", "password": "1234"});
 
-    let res = srv.post("/auth/login/").send_json(&payload).await.unwrap();
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/auth/login")
+                .header("content-type", "application/json")
+                .body(Body::from(payload.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
 
     assert_eq!(res.status().as_u16(), 403);
 
     let payload = json!({"username": "aaa", "password": "1234"});
 
-    let res = srv.post("/auth/login/").send_json(&payload).await.unwrap();
+    let res = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/auth/login")
+                .header("content-type", "application/json")
+                .body(Body::from(payload.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
 
     assert_eq!(res.status().as_u16(), 403);
 }

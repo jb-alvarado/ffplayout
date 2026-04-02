@@ -1,13 +1,12 @@
-use actix_web::{Responder, get, web};
-use actix_web_grants::{authorities::AuthDetails, proc_macro::protect};
+use axum::{Extension, Json, extract::Path};
 use tokio::sync::RwLock;
 
 use crate::{
-    db::models::{Role, UserMeta},
-    player::controller::ChannelController,
-    sse::broadcast::Broadcaster,
+    db::models::Role, player::controller::ChannelController, sse::broadcast::Broadcaster,
     utils::errors::ServiceError,
 };
+
+use super::AuthUser;
 
 /// ### System Statistics
 ///
@@ -17,22 +16,18 @@ use crate::{
 /// curl -X GET http://127.0.0.1:8787/api/system/1
 /// -H 'Content-Type: application/json' -H 'Authorization: Bearer <TOKEN>'
 /// ```
-#[get("/system/{id}")]
-#[protect(
-    any("Role::GlobalAdmin", "Role::ChannelAdmin", "Role::User"),
-    ty = "Role",
-    expr = "user.channels.contains(&*id) || role.has_authority(&Role::GlobalAdmin)"
-)]
 pub async fn get_system_stat(
-    id: web::Path<i32>,
-    broadcaster: web::Data<Broadcaster>,
-    controllers: web::Data<RwLock<ChannelController>>,
-    role: AuthDetails<Role>,
-    user: web::ReqData<UserMeta>,
-) -> Result<impl Responder, ServiceError> {
+    Path(id): Path<i32>,
+    Extension(broadcaster): Extension<std::sync::Arc<Broadcaster>>,
+    Extension(controllers): Extension<std::sync::Arc<RwLock<ChannelController>>>,
+    user: AuthUser,
+) -> Result<Json<crate::utils::system::SystemStat>, ServiceError> {
+    user.ensure_any_role(&[Role::GlobalAdmin, Role::ChannelAdmin, Role::User])?;
+    user.ensure_channel_or_admin(id)?;
+
     let manager = {
         let guard = controllers.read().await;
-        guard.get(*id)
+        guard.get(id)
     }
     .ok_or_else(|| ServiceError::BadRequest(format!("Channel {id} not found!")))?;
 
@@ -40,5 +35,5 @@ pub async fn get_system_stat(
 
     let stat = broadcaster.system.stat(&config).await;
 
-    Ok(web::Json(stat))
+    Ok(Json(stat))
 }

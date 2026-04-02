@@ -1,18 +1,16 @@
-use actix_web::{Responder, delete, get, post, put, web};
-use actix_web_grants::{authorities::AuthDetails, proc_macro::protect};
+use axum::{Extension, Json, extract::Path};
 use log::*;
 use sqlx::{Pool, Sqlite};
 use tokio::sync::RwLock;
 
 use crate::{
     AdvancedConfig,
-    db::{
-        handles,
-        models::{Role, UserMeta},
-    },
+    db::{handles, models::Role},
     player::controller::ChannelController,
     utils::{config::get_config, errors::ServiceError},
 };
+
+use super::AuthUser;
 
 /// #### ffplayout Config
 ///
@@ -23,27 +21,23 @@ use crate::{
 /// ```
 ///
 /// Response is a JSON object
-#[get("/playout/advanced/{id}")]
-#[protect(
-    any("Role::GlobalAdmin", "Role::ChannelAdmin"),
-    ty = "Role",
-    expr = "user.channels.contains(&*id) || role.has_authority(&Role::GlobalAdmin)"
-)]
-async fn get_advanced_config(
-    id: web::Path<i32>,
-    controllers: web::Data<RwLock<ChannelController>>,
-    role: AuthDetails<Role>,
-    user: web::ReqData<UserMeta>,
-) -> Result<impl Responder, ServiceError> {
+pub async fn get_advanced_config(
+    Path(id): Path<i32>,
+    Extension(controllers): Extension<std::sync::Arc<RwLock<ChannelController>>>,
+    user: AuthUser,
+) -> Result<Json<AdvancedConfig>, ServiceError> {
+    user.ensure_any_role(&[Role::GlobalAdmin, Role::ChannelAdmin])?;
+    user.ensure_channel_or_admin(id)?;
+
     let manager = {
         let guard = controllers.read().await;
-        guard.get(*id)
+        guard.get(id)
     }
     .ok_or_else(|| ServiceError::BadRequest(format!("Channel {id} not found!")))?;
 
     let config = manager.config.read().await.advanced.clone();
 
-    Ok(web::Json(config))
+    Ok(Json(config))
 }
 
 /// **Get related Advanced Config**
@@ -53,20 +47,16 @@ async fn get_advanced_config(
 /// ```
 ///
 /// Response is a JSON object
-#[get("/playout/advanced/{id}/")]
-#[protect(
-    any("Role::GlobalAdmin", "Role::ChannelAdmin"),
-    ty = "Role",
-    expr = "user.channels.contains(&*id) || role.has_authority(&Role::GlobalAdmin)"
-)]
-async fn get_related_advanced_config(
-    pool: web::Data<Pool<Sqlite>>,
-    id: web::Path<i32>,
-    role: AuthDetails<Role>,
-    user: web::ReqData<UserMeta>,
-) -> Result<impl Responder, ServiceError> {
-    match handles::select_related_advanced_configuration(&pool, *id).await {
-        Ok(configs) => Ok(web::Json(
+pub async fn get_related_advanced_config(
+    Extension(pool): Extension<Pool<Sqlite>>,
+    Path(id): Path<i32>,
+    user: AuthUser,
+) -> Result<Json<Vec<AdvancedConfig>>, ServiceError> {
+    user.ensure_any_role(&[Role::GlobalAdmin, Role::ChannelAdmin])?;
+    user.ensure_channel_or_admin(id)?;
+
+    match handles::select_related_advanced_configuration(&pool, id).await {
+        Ok(configs) => Ok(Json(
             configs
                 .iter()
                 .map(|c| AdvancedConfig::new(c.clone()))
@@ -87,20 +77,15 @@ async fn get_related_advanced_config(
 /// ```
 ///
 /// Response is a JSON object
-#[delete("/playout/advanced/{channel}/{id}")]
-#[protect(
-    any("Role::GlobalAdmin", "Role::ChannelAdmin"),
-    ty = "Role",
-    expr = "user.channels.contains(&path.0) || role.has_authority(&Role::GlobalAdmin)"
-)]
-async fn remove_related_advanced_config(
-    pool: web::Data<Pool<Sqlite>>,
-    path: web::Path<(i32, i32)>,
-    controllers: web::Data<RwLock<ChannelController>>,
-    role: AuthDetails<Role>,
-    user: web::ReqData<UserMeta>,
-) -> Result<impl Responder, ServiceError> {
-    let (_, id) = path.into_inner();
+pub async fn remove_related_advanced_config(
+    Extension(pool): Extension<Pool<Sqlite>>,
+    Path((channel, id)): Path<(i32, i32)>,
+    Extension(controllers): Extension<std::sync::Arc<RwLock<ChannelController>>>,
+    user: AuthUser,
+) -> Result<&'static str, ServiceError> {
+    user.ensure_any_role(&[Role::GlobalAdmin, Role::ChannelAdmin])?;
+    user.ensure_channel_or_admin(channel)?;
+
     let manager = {
         let guard = controllers.read().await;
         guard.get(id)
@@ -126,33 +111,28 @@ async fn remove_related_advanced_config(
 /// curl -X PUT http://127.0.0.1:8787/api/playout/advanced/1 -H "Content-Type: application/json" \
 /// -d { <CONFIG DATA> } -H 'Authorization: Bearer <TOKEN>'
 /// ```
-#[put("/playout/advanced/{id}")]
-#[protect(
-    "Role::GlobalAdmin",
-    "Role::ChannelAdmin",
-    ty = "Role",
-    expr = "user.channels.contains(&*id) || role.has_authority(&Role::GlobalAdmin)"
-)]
-async fn update_advanced_config(
-    pool: web::Data<Pool<Sqlite>>,
-    id: web::Path<i32>,
-    data: web::Json<AdvancedConfig>,
-    controllers: web::Data<RwLock<ChannelController>>,
-    role: AuthDetails<Role>,
-    user: web::ReqData<UserMeta>,
-) -> Result<impl Responder, ServiceError> {
+pub async fn update_advanced_config(
+    Extension(pool): Extension<Pool<Sqlite>>,
+    Path(id): Path<i32>,
+    Extension(controllers): Extension<std::sync::Arc<RwLock<ChannelController>>>,
+    user: AuthUser,
+    Json(data): Json<AdvancedConfig>,
+) -> Result<Json<&'static str>, ServiceError> {
+    user.ensure_any_role(&[Role::GlobalAdmin, Role::ChannelAdmin])?;
+    user.ensure_channel_or_admin(id)?;
+
     let manager = {
         let guard = controllers.read().await;
-        guard.get(*id)
+        guard.get(id)
     }
     .ok_or_else(|| ServiceError::BadRequest(format!("Channel {id} not found!")))?;
 
-    handles::update_advanced_configuration(&pool, *id, data.into_inner()).await?;
-    let new_config = get_config(&pool, *id).await?;
+    handles::update_advanced_configuration(&pool, id, data).await?;
+    let new_config = get_config(&pool, id).await?;
 
     manager.update_config(new_config).await;
 
-    Ok(web::Json("Update success"))
+    Ok(Json("Update success"))
 }
 
 /// **Add Advanced Config**
@@ -161,31 +141,26 @@ async fn update_advanced_config(
 /// curl -X POST http://127.0.0.1:8787/api/playout/advanced/1 -H "Content-Type: application/json" \
 /// -d { <CONFIG DATA> } -H 'Authorization: Bearer <TOKEN>'
 /// ```
-#[post("/playout/advanced/{id}/")]
-#[protect(
-    "Role::GlobalAdmin",
-    "Role::ChannelAdmin",
-    ty = "Role",
-    expr = "user.channels.contains(&*id) || role.has_authority(&Role::GlobalAdmin)"
-)]
-async fn add_advanced_config(
-    pool: web::Data<Pool<Sqlite>>,
-    id: web::Path<i32>,
-    data: web::Json<AdvancedConfig>,
-    controllers: web::Data<RwLock<ChannelController>>,
-    role: AuthDetails<Role>,
-    user: web::ReqData<UserMeta>,
-) -> Result<impl Responder, ServiceError> {
+pub async fn add_advanced_config(
+    Extension(pool): Extension<Pool<Sqlite>>,
+    Path(id): Path<i32>,
+    Extension(controllers): Extension<std::sync::Arc<RwLock<ChannelController>>>,
+    user: AuthUser,
+    Json(data): Json<AdvancedConfig>,
+) -> Result<Json<&'static str>, ServiceError> {
+    user.ensure_any_role(&[Role::GlobalAdmin, Role::ChannelAdmin])?;
+    user.ensure_channel_or_admin(id)?;
+
     let manager = {
         let guard = controllers.read().await;
-        guard.get(*id)
+        guard.get(id)
     }
     .ok_or_else(|| ServiceError::BadRequest(format!("Channel {id} not found!")))?;
 
-    handles::insert_advanced_configuration(&pool, *id, None, data.into_inner()).await?;
-    let new_config = get_config(&pool, *id).await?;
+    handles::insert_advanced_configuration(&pool, id, None, data).await?;
+    let new_config = get_config(&pool, id).await?;
 
     manager.update_config(new_config).await;
 
-    Ok(web::Json("Update success"))
+    Ok(Json("Update success"))
 }

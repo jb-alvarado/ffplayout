@@ -6,9 +6,8 @@ use std::{
 #[cfg(target_family = "unix")]
 use std::os::unix::fs::MetadataExt;
 
-use actix_multipart::Multipart;
 use async_walkdir::WalkDir;
-// use futures_util::TryStreamExt as _;
+use axum::extract::Multipart;
 use lexical_sort::{PathSort, natural_lexical_cmp};
 use log::*;
 use rand::{RngExt, distr::Alphanumeric, seq::SliceRandom};
@@ -248,16 +247,15 @@ impl LocalStorage {
         path: &Path,
         is_abs: bool,
     ) -> Result<(), ServiceError> {
-        while let Some(mut field) = data.try_next().await? {
-            let content_disposition = field.content_disposition().ok_or("No content")?;
-            debug!("{content_disposition}");
+        while let Some(field) = data.next_field().await? {
+            debug!("multipart field: {:?}", field.name());
             let rand_string: String = rand::rng()
                 .sample_iter(&Alphanumeric)
                 .take(20)
                 .map(char::from)
                 .collect();
-            let filename = content_disposition
-                .get_filename()
+            let filename = field
+                .file_name()
                 .map_or_else(|| rand_string.to_string(), sanitize_filename::sanitize);
 
             let filepath = if is_abs {
@@ -277,26 +275,8 @@ impl LocalStorage {
             }
 
             let mut f = fs::File::create(&filepath).await?;
-
-            loop {
-                match field.try_next().await {
-                    Ok(Some(chunk)) => {
-                        f = f.write_all(&chunk).await.map(|_| f)?;
-                    }
-
-                    Ok(None) => break,
-
-                    Err(e) => {
-                        if e.to_string().contains("stream is incomplete") {
-                            info!("Delete non finished file: {filepath:?}");
-
-                            tokio::fs::remove_file(filepath).await?;
-                        }
-
-                        return Err(e.into());
-                    }
-                }
-            }
+            let bytes = field.bytes().await?;
+            f.write_all(&bytes).await?;
         }
         Ok(())
     }
