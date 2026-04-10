@@ -62,7 +62,7 @@ pub async fn update_preset(
 /// **Add new Preset**
 ///
 /// ```BASH
-/// curl -X POST http://127.0.0.1:8787/api/presets/1/ -H 'Content-Type: application/json' \
+/// curl -X POST http://127.0.0.1:8787/api/presets/1 -H 'Content-Type: application/json' \
 /// -d '{ "name": "<PRESET NAME>", "text": "TEXT>", "x": "<X>", "y": "<Y>", "fontsize": 24, "line_spacing": 4, "fontcolor": "#ffffff", "box": 1, "boxcolor": "#000000", "boxborderw": 4, "alpha": 1.0, "channel_id": 1 }' \
 /// -H 'Authorization: Bearer <TOKEN>'
 /// ```

@@ -357,7 +357,7 @@ const controlProcess = throttle(async (state: string) => {
         Control playout (start, stop, restart)
     */
     const id = configStore.channels[configStore.i]?.id
-    await fetch(`/api/control/${id}/process/`, {
+    await fetch(`/api/control/${id}/process`, {
         method: 'POST',
         headers: { ...configStore.contentType, ...authStore.authHeader },
         body: JSON.stringify({ command: state }),
@@ -381,7 +381,7 @@ const controlPlayout = throttle(async (state: string) => {
     */
     const id = configStore.channels[configStore.i]?.id
 
-    await fetch(`/api/control/${id}/playout/`, {
+    await fetch(`/api/control/${id}/playout`, {
         method: 'POST',
         headers: { ...configStore.contentType, ...authStore.authHeader },
         body: JSON.stringify({ control: state }),

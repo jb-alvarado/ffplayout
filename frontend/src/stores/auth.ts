@@ -39,7 +39,7 @@ export const useAuth = defineStore('auth', {
                 password,
             }
 
-            await fetch('/auth/login/', {
+            await fetch('/auth/login', {
                 method: 'POST',
                 headers: new Headers([['content-type', 'application/json;charset=UTF-8']]),
                 body: JSON.stringify(payload),
@@ -84,7 +84,7 @@ export const useAuth = defineStore('auth', {
         },
 
         async refreshToken() {
-            await fetch('/auth/refresh/', {
+            await fetch('/auth/refresh', {
                 method: 'POST',
                 headers: new Headers([['content-type', 'application/json;charset=UTF-8']]),
                 body: JSON.stringify({ refresh: this.jwtRefresh }),

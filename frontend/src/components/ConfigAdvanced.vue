@@ -444,7 +444,7 @@ onBeforeMount(async () => {
 async function fetchRelatedConfigs() {
     const id = configStore.channels[configStore.i]?.id ?? 0
 
-    await fetch(`/api/playout/advanced/${id}/`, {
+    await fetch(`/api/playout/advanced/${id}/related`, {
         method: 'GET',
         headers: { ...configStore.contentType, ...authStore.authHeader },
     })
@@ -493,7 +493,7 @@ async function onSubmitAdvanced() {
 
         await fetchRelatedConfigs()
 
-        await fetch(`/api/control/${id}/process/`, {
+        await fetch(`/api/control/${id}/process`, {
             method: 'POST',
             headers: { ...configStore.contentType, ...authStore.authHeader },
             body: JSON.stringify({ command: 'status' }),
@@ -519,7 +519,7 @@ async function restart(res: boolean) {
     if (res) {
         const id = configStore.channels[configStore.i]?.id ?? 0
 
-        await fetch(`/api/control/${id}/process/`, {
+        await fetch(`/api/control/${id}/process`, {
             method: 'POST',
             headers: { ...configStore.contentType, ...authStore.authHeader },
             body: JSON.stringify({ command: 'restart' }),

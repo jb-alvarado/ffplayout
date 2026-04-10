@@ -393,7 +393,7 @@ async function submitMessage() {
         boxborderw: form.value.border.toString(),
     }
 
-    const response = await fetch(`/api/control/${configStore.channels[configStore.i]?.id}/text/`, {
+    const response = await fetch(`/api/control/${configStore.channels[configStore.i]?.id}/text`, {
         method: 'POST',
         headers: { ...configStore.contentType, ...authStore.authHeader },
         body: JSON.stringify(obj),

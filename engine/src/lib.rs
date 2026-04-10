@@ -15,10 +15,12 @@ pub mod player;
 pub mod sse;
 pub mod utils;
 
+#[cfg(not(debug_assertions))]
+pub mod serve;
+
 use api::auth;
 use db::models::{Role, UserMeta};
-use utils::advanced_config::AdvancedConfig;
-use utils::args_parse::Args;
+use utils::{advanced_config::AdvancedConfig, args_parse::Args, errors::ServiceError};
 
 pub static ARGS: LazyLock<Args> = LazyLock::new(Args::parse);
 
@@ -34,16 +36,12 @@ pub async fn extract(req: &mut Request) -> Result<HashSet<Role>, Response> {
         .and_then(|value| value.trim().split_once(' '))
     else {
         warn!("Malformed or invalid authorization header");
-        return Err(
-            utils::errors::ServiceError::Unauthorized("Unauthorized".to_string()).into_response(),
-        );
+        return Err(ServiceError::Unauthorized("Unauthorized".to_string()).into_response());
     };
 
     if !scheme.eq_ignore_ascii_case("bearer") {
         warn!("Unsupported authorization scheme: {scheme}");
-        return Err(
-            utils::errors::ServiceError::Unauthorized("Unauthorized".to_string()).into_response(),
-        );
+        return Err(ServiceError::Unauthorized("Unauthorized".to_string()).into_response());
     }
 
     match auth::decode_jwt(token).await {
@@ -58,10 +56,7 @@ pub async fn extract(req: &mut Request) -> Result<HashSet<Role>, Response> {
         }
         Err(e) => {
             error!("JWT decode error: {e:?}");
-            Err(
-                utils::errors::ServiceError::Unauthorized("Unauthorized".to_string())
-                    .into_response(),
-            )
+            Err(ServiceError::Unauthorized("Unauthorized".to_string()).into_response())
         }
     }
 }

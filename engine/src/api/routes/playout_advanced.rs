@@ -43,7 +43,7 @@ pub async fn get_advanced_config(
 /// **Get related Advanced Config**
 ///
 /// ```BASH
-/// curl -X GET http://127.0.0.1:8787/api/playout/advanced/1/ -H 'Authorization: Bearer <TOKEN>'
+/// curl -X GET http://127.0.0.1:8787/api/playout/advanced/1 -H 'Authorization: Bearer <TOKEN>'
 /// ```
 ///
 /// Response is a JSON object
@@ -73,7 +73,7 @@ pub async fn get_related_advanced_config(
 /// **Delete Advanced Config**
 ///
 /// ```BASH
-/// curl -X DELETE http://127.0.0.1:8787/api/playout/advanced/ -H 'Authorization: Bearer <TOKEN>'
+/// curl -X DELETE http://127.0.0.1:8787/api/playout/advanced -H 'Authorization: Bearer <TOKEN>'
 /// ```
 ///
 /// Response is a JSON object

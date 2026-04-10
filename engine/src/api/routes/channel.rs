@@ -116,7 +116,7 @@ pub async fn patch_channel(
 /// **Create new Channel**
 ///
 /// ```BASH
-/// curl -X POST http://127.0.0.1:8787/api/channel/ -H "Content-Type: application/json" \
+/// curl -X POST http://127.0.0.1:8787/api/channel -H "Content-Type: application/json" \
 /// -d '{ "name": "Channel 2", "preview_url": "http://localhost/live/channel2.m3u8", "extra_extensions": "jpg,jpeg,png" }' \
 /// -H "Authorization: Bearer <TOKEN>"
 /// ```

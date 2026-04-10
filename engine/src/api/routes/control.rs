@@ -27,7 +27,7 @@ use super::AuthUser;
 /// **Send Text to ffplayout**
 ///
 /// ```BASH
-/// curl -X POST http://127.0.0.1:8787/api/control/1/text/ \
+/// curl -X POST http://127.0.0.1:8787/api/control/1/text \
 /// -H 'Content-Type: application/json' -H 'Authorization: Bearer <TOKEN>' \
 /// -d '{"text": "Hello from ffplayout", "x": "(w-text_w)/2", "y": "(h-text_h)/2", fontsize": "24", "line_spacing": "4", "fontcolor": "#ffffff", "box": "1", "boxcolor": "#000000", "boxborderw": "4", "alpha": "1.0"}'
 /// ```
@@ -59,7 +59,7 @@ pub async fn send_text_message(
 /// - reset
 ///
 /// ```BASH
-/// curl -X POST http://127.0.0.1:8787/api/control/1/playout/ -H 'Content-Type: application/json'
+/// curl -X POST http://127.0.0.1:8787/api/control/1/playout -H 'Content-Type: application/json'
 /// -d '{ "command": "reset" }' -H 'Authorization: Bearer <TOKEN>'
 /// ```
 pub async fn control_playout(
@@ -148,7 +148,7 @@ pub async fn media_current(
 /// - status
 ///
 /// ```BASH
-/// curl -X POST http://127.0.0.1:8787/api/control/1/process/
+/// curl -X POST http://127.0.0.1:8787/api/control/1/process
 /// -H 'Content-Type: application/json' -H 'Authorization: Bearer <TOKEN>'
 /// -d '{"command": "start"}'
 /// ```

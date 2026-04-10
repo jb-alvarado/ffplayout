@@ -27,7 +27,7 @@ use super::AuthUser;
 /// **Get File/Folder List**
 ///
 /// ```BASH
-/// curl -X POST http://127.0.0.1:8787/api/file/1/browse/ -H 'Content-Type: application/json'
+/// curl -X POST http://127.0.0.1:8787/api/file/1/browse -H 'Content-Type: application/json'
 /// -d '{ "source": "/" }' -H 'Authorization: Bearer <TOKEN>'
 /// ```
 pub async fn file_browser(
@@ -54,7 +54,7 @@ pub async fn file_browser(
 /// **Create Folder**
 ///
 /// ```BASH
-/// curl -X POST http://127.0.0.1:8787/api/file/1/create-folder/ -H 'Content-Type: application/json'
+/// curl -X POST http://127.0.0.1:8787/api/file/1/create-folder -H 'Content-Type: application/json'
 /// -d '{"source": "<FOLDER PATH>"}' -H 'Authorization: Bearer <TOKEN>'
 /// ```
 pub async fn add_dir(
@@ -80,7 +80,7 @@ pub async fn add_dir(
 /// **Rename File**
 ///
 /// ```BASH
-/// curl -X POST http://127.0.0.1:8787/api/file/1/rename/ -H 'Content-Type: application/json'
+/// curl -X POST http://127.0.0.1:8787/api/file/1/rename -H 'Content-Type: application/json'
 /// -d '{"source": "<SOURCE>", "target": "<TARGET>"}' -H 'Authorization: Bearer <TOKEN>'
 /// ```
 pub async fn move_rename(
@@ -107,7 +107,7 @@ pub async fn move_rename(
 /// **Remove File/Folder**
 ///
 /// ```BASH
-/// curl -X POST http://127.0.0.1:8787/api/file/1/remove/ -H 'Content-Type: application/json'
+/// curl -X POST http://127.0.0.1:8787/api/file/1/remove -H 'Content-Type: application/json'
 /// -d '{"source": "<SOURCE>"}' -H 'Authorization: Bearer <TOKEN>'
 /// ```
 pub async fn remove(
@@ -136,11 +136,11 @@ pub async fn remove(
 /// **Upload File**
 ///
 /// ```BASH
-/// curl -X PUT http://127.0.0.1:8787/api/file/1/upload/ -H 'Authorization: Bearer <TOKEN>'
+/// curl -X PUT http://127.0.0.1:8787/api/file/1/upload -H 'Authorization: Bearer <TOKEN>'
 /// -F "file=@file.mp4"
 /// ```
 #[allow(clippy::too_many_arguments)]
-pub async fn save_file(
+pub async fn upload_file(
     Path(id): Path<i32>,
     Query(obj): Query<FileObj>,
     Extension(controllers): Extension<std::sync::Arc<RwLock<ChannelController>>>,
@@ -203,7 +203,7 @@ pub async fn get_file(
 /// lines with leading "#" will be ignore
 ///
 /// ```BASH
-/// curl -X PUT http://127.0.0.1:8787/api/file/1/import/ -H 'Authorization: Bearer <TOKEN>'
+/// curl -X PUT http://127.0.0.1:8787/api/file/1/import -H 'Authorization: Bearer <TOKEN>'
 /// -F "file=@list.m3u"
 /// ```
 pub async fn import_playlist(
@@ -211,7 +211,7 @@ pub async fn import_playlist(
     Query(obj): Query<ImportObj>,
     Extension(controllers): Extension<std::sync::Arc<RwLock<ChannelController>>>,
     user: AuthUser,
-    payload: Multipart,
+    mut payload: Multipart,
 ) -> Result<(StatusCode, String), ServiceError> {
     user.ensure_any_role(&[Role::GlobalAdmin, Role::ChannelAdmin, Role::User])?;
     user.ensure_channel_or_admin(id)?;
@@ -228,7 +228,12 @@ pub async fn import_playlist(
     let path = env::temp_dir().join(file);
     let path_clone = path.clone();
 
-    manager.storage.upload(payload, &path, true).await?;
+    if let Some(field) = payload.next_field().await? {
+        let bytes = field.bytes().await?;
+        fs::write(&path, &bytes).await?;
+    } else {
+        return Err(ServiceError::BadRequest("No file provided".into()));
+    }
 
     let response = import_file(&playlists, &obj.date, Some(channel_name), &path_clone).await?;
 

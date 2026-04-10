@@ -41,7 +41,7 @@ const router = createRouter({
     ],
 })
 
-router.beforeEach(async (to, from, next) => {
+router.beforeEach(async (to) => {
     const auth = useAuth()
     const configStore = useConfig()
 
@@ -49,9 +49,9 @@ router.beforeEach(async (to, from, next) => {
 
     if (!auth.isLogin && !String(to.name).includes('home')) {
         // const loc = i18n.locale.value === 'en-US' ? '' : `${i18n.locale.value}/`
-        next('/')
+        return '/'
     } else {
-        next()
+        return
     }
 })
 

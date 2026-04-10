@@ -4,8 +4,17 @@ use std::{
     io::{self, Write},
     path::PathBuf,
     sync::{Arc, RwLock},
+    time::Instant,
 };
 
+use axum::{
+    body::{Body, HttpBody},
+    http::{
+        Request, Response,
+        header::{CONTENT_LENGTH, REFERER, USER_AGENT},
+    },
+    middleware::Next,
+};
 use chrono::{DateTime, FixedOffset};
 use chrono_tz::Tz;
 use flexi_logger::{
@@ -13,6 +22,7 @@ use flexi_logger::{
     WriteMode,
     writers::{FileLogWriter, LogWriter},
 };
+use real::RealIp;
 
 use log::{kv::Value, *};
 use regex::{Captures, Regex};
@@ -567,4 +577,59 @@ pub fn stderr_log(line: &str, suffix: ProcessUnit, channel_id: i32) -> Result<()
     }
 
     Ok(())
+}
+
+pub async fn log_middleware(real_ip: RealIp, req: Request<Body>, next: Next) -> Response<Body> {
+    let start = Instant::now();
+    let ip = real_ip.ip();
+
+    let m = req.method().clone();
+    let uri = req.uri().clone();
+    let v = req.version();
+
+    let r = req
+        .headers()
+        .get(REFERER)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("-")
+        .to_string();
+
+    let a = req
+        .headers()
+        .get(USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("-")
+        .to_string();
+
+    let res = next.run(req).await;
+
+    let status = res.status().as_u16();
+    let size = res
+        .headers()
+        .get(CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string)
+        .or_else(|| {
+            res.body()
+                .size_hint()
+                .exact()
+                .map(|value| value.to_string())
+        })
+        .unwrap_or_else(|| "-".to_string());
+
+    let l = start.elapsed().as_secs_f64();
+
+    match status {
+        500..=599 => {
+            error!(r#"{ip} "{m} {uri} {v:?}" {status} {size} "{r}" "{a}" {l:.6}"#);
+        }
+        401 | 403 | 429 => {
+            warn!(r#"{ip} "{m} {uri} {v:?}" {status} {size} "{r}" "{a}" {l:.6}"#);
+        }
+        _ => {
+            info!(r#"{ip} "{m} {uri} {v:?}" {status} {size} "{r}" "{a}" {l:.6}"#);
+        }
+    }
+
+    res
 }

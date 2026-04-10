@@ -51,7 +51,7 @@ pub async fn get_playlist(
 /// **Save playlist**
 ///
 /// ```BASH
-/// curl -X POST http://127.0.0.1:8787/api/playlist/1/
+/// curl -X POST http://127.0.0.1:8787/api/playlist/1
 /// -H 'Content-Type: application/json' -H 'Authorization: Bearer <TOKEN>'
 /// --data "{<JSON playlist data>}"
 /// ```
@@ -85,7 +85,7 @@ pub async fn save_playlist(
 /// ```BASH
 /// curl -X POST http://127.0.0.1:8787/api/playlist/1/generate/2022-06-20
 /// -H 'Content-Type: application/json' -H 'Authorization: Bearer <TOKEN>'
-/// /// --data '{ "paths": [<list of paths>] }' # <- data is optional
+/// --data '{ "paths": [<list of paths>] }' # <- data is optional
 /// ```
 ///
 /// Or with template:

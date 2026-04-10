@@ -194,7 +194,7 @@ export const useConfig = defineStore('config', {
 
                 return update
             } else {
-                const update = await fetch(`/api/playout/advanced/${id}/`, {
+                const update = await fetch(`/api/playout/advanced/${id}`, {
                     method: 'POST',
                     headers: { ...this.contentType, ...authStore.authHeader },
                     body: JSON.stringify(this.advanced),

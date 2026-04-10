@@ -593,7 +593,7 @@ async function onSubmitPlayout() {
 
         const id = configStore.channels[configStore.i]?.id
 
-        await fetch(`/api/control/${id}/process/`, {
+        await fetch(`/api/control/${id}/process`, {
             method: 'POST',
             headers: { ...configStore.contentType, ...authStore.authHeader },
             body: JSON.stringify({ command: 'status' }),

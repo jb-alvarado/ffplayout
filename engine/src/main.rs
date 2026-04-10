@@ -1,7 +1,8 @@
 use std::sync::{Arc, atomic::AtomicBool};
 
-use axum::{Extension, Router};
+use axum::{Extension, Router, middleware};
 use log::*;
+use real::RealIpLayer;
 use tokio::{
     fs::File,
     io::AsyncReadExt,
@@ -21,12 +22,15 @@ use ffplayout::{
         args_parse::init_args,
         config::get_config,
         errors::ProcessError,
-        logging::init_logging,
+        logging::{init_logging, log_middleware},
         mail::{self, MailQueue},
         playlist::generate_playlist,
         time_machine::set_mock_time,
     },
 };
+
+#[cfg(not(debug_assertions))]
+use ffplayout::serve::routes::admin_ui_routes;
 
 #[tokio::main]
 async fn main() -> Result<(), ProcessError> {
@@ -83,10 +87,15 @@ async fn main() -> Result<(), ProcessError> {
         let app = Router::new()
             .merge(api::path::routes(pool.clone()))
             .layer(Extension(pool.clone()))
+            .layer(middleware::from_fn(log_middleware))
+            .layer(RealIpLayer::default())
             .layer(Extension(mail_queues.clone()))
             .layer(Extension(channel_controllers.clone()))
             .layer(Extension(auth_state))
             .layer(Extension(broadcast_data));
+
+        #[cfg(not(debug_assertions))]
+        let app = app.merge(admin_ui_routes());
 
         info!("Running ffplayout, listen on http://{conn}");
 
@@ -151,7 +160,13 @@ async fn main() -> Result<(), ProcessError> {
         }
     } else {
         error!(
-            "Run ffplayout with correct parameters! For example:\n            -l 127.0.0.1\n            --channel 1 2 --foreground\n            --channel 1 --generate 2025-01-20 - 2025-01-25\n        Run ffplayout -h for more information."
+            "Run ffplayout with correct parameters! For example:\n
+                -l 127.0.0.1\n
+                --channel 1 2
+                --foreground\n
+                --channel 1
+                --generate 2025-01-20 - 2025-01-25\n
+            Run ffplayout -h for more information."
         );
     }
 

@@ -336,6 +336,7 @@ import GenericModal from '@/components/GenericModal.vue'
 import VideoPlayer from '@/components/VideoPlayer.vue'
 
 import { stringFormatter } from '@/composables/helper'
+import { useFileUpload } from '@/composables/useFileUpload'
 
 const { t } = useI18n()
 const { width } = useWindowSize({ initialWidth: 800 })
@@ -345,6 +346,14 @@ const indexStore = useIndex()
 const mediaStore = useMedia()
 const { toMin, mediaType, filename, parent, dir_file } = stringFormatter()
 const { i } = storeToRefs(useConfig())
+const {
+    uploadTask,
+    currentNumber,
+    currentProgress,
+    overallProgress,
+    resetUploadState,
+    uploadFiles: uploadFilesComposable,
+} = useFileUpload()
 
 const horizontal = ref(false)
 const deleteName = ref('')
@@ -366,12 +375,7 @@ const extensionsArr = ref([] as string[])
 const folderName = ref({} as Folder)
 const inputFiles = ref([] as File[])
 const fileInputName = ref()
-const currentNumber = ref(0)
-const uploadTask = ref('')
-const overallProgress = ref(0)
-const currentProgress = ref(0)
 const lastPath = ref('')
-const xhr = ref(new XMLHttpRequest())
 
 document.title = `${t('button.media')} | ffplayout`
 
@@ -458,7 +462,7 @@ async function handleDrop(event: any, targetFolder: any, isParent: boolean | nul
     }
 
     if (source !== target) {
-        await fetch(`/api/file/${configStore.channels[configStore.i]?.id}/rename/`, {
+        await fetch(`/api/file/${configStore.channels[configStore.i]?.id}/rename`, {
             method: 'POST',
             headers: { ...configStore.contentType, ...authStore.authHeader },
             body: JSON.stringify({ source, target }),
@@ -526,7 +530,7 @@ async function deleteFileOrFolder(del: boolean) {
     showDeleteModal.value = false
 
     if (del) {
-        await fetch(`/api/file/${configStore.channels[configStore.i]?.id}/remove/`, {
+        await fetch(`/api/file/${configStore.channels[configStore.i]?.id}/remove`, {
             method: 'POST',
             headers: { ...configStore.contentType, ...authStore.authHeader },
             body: JSON.stringify({ source: deleteName.value, recursive: recursive.value }),
@@ -562,7 +566,7 @@ async function renameFile(ren: boolean) {
     showRenameModal.value = false
 
     if (ren && renameOldName.value !== renameNewName.value) {
-        await fetch(`/api/file/${configStore.channels[configStore.i]?.id}/rename/`, {
+        await fetch(`/api/file/${configStore.channels[configStore.i]?.id}/rename`, {
             method: 'POST',
             headers: { ...configStore.contentType, ...authStore.authHeader },
             body: JSON.stringify({
@@ -605,7 +609,7 @@ async function createFolder(create: boolean) {
             return
         }
 
-        await fetch(`/api/file/${configStore.channels[configStore.i]?.id}/create-folder/`, {
+        await fetch(`/api/file/${configStore.channels[configStore.i]?.id}/create-folder`, {
             method: 'POST',
             headers: { ...configStore.contentType, ...authStore.authHeader },
             body: JSON.stringify({ source: path }),
@@ -634,60 +638,33 @@ function onFileChange(evt: any) {
     inputFiles.value = files
 }
 
-async function upload(file: any): Promise<null | undefined> {
-    const formData = new FormData()
-    formData.append(file.name, file)
-    xhr.value = new XMLHttpRequest()
-
-    return new Promise((resolve) => {
-        xhr.value.open(
-            'PUT',
-            `/api/file/${configStore.channels[configStore.i]?.id}/upload/?path=${encodeURIComponent(
-                mediaStore.crumbs[mediaStore.crumbs.length - 1]?.path ?? ''
-            )}`
-        )
-
-        xhr.value.setRequestHeader('Authorization', `Bearer ${authStore.jwtToken}`)
-
-        xhr.value.upload.onprogress = (event: any) => {
-            currentProgress.value = Math.round((100 * event.loaded) / event.total)
-        }
-
-        xhr.value.upload.onerror = () => {
-            indexStore.msgAlert('error', `${t('media.folderError')}: ${xhr.value.status}`, 3)
-
-            resolve(undefined)
-        }
-
-        // upload completed successfully
-        xhr.value.onload = () => {
-            currentProgress.value = 100
-            resolve(xhr.value.response)
-        }
-
-        xhr.value.send(formData)
-    })
-}
-
 async function uploadFiles(upl: boolean) {
     if (upl) {
         await authStore.inspectToken()
         lastPath.value = mediaStore.folderTree.source
 
-        for (let i = 0; i < inputFiles.value.length; i++) {
-            const file = inputFiles.value[i]
-            if (!file) continue
-            uploadTask.value = file.name
-            currentProgress.value = 0
-            currentNumber.value = i + 1
-
+        const filesToUpload = Array.from(inputFiles.value).filter((file) => {
             if (mediaStore.folderTree.files.find((f) => f.name === file.name)) {
                 indexStore.msgAlert('warning', t('media.fileExists'), 3)
-            } else {
-                await upload(file)
+                return false
             }
+            return true
+        })
 
-            overallProgress.value = (currentNumber.value * 100) / inputFiles.value.length
+        try {
+            await uploadFilesComposable(filesToUpload, {
+                buildRequest: (_file, currentIndex, batchCount) => ({
+                    url: `/api/file/${configStore.channels[configStore.i]?.id}/upload?path=${encodeURIComponent(
+                        mediaStore.crumbs[mediaStore.crumbs.length - 1]?.path ?? ''
+                    )}`,
+                    headers: authStore.authHeader,
+                    method: 'PUT',
+                    currentIndex,
+                    batchCount,
+                }),
+            })
+        } catch (err: any) {
+            indexStore.msgAlert('error', err.message || t('media.folderError'), 3)
         }
 
         uploadTask.value = 'Done...'
@@ -695,20 +672,14 @@ async function uploadFiles(upl: boolean) {
 
         setTimeout(() => {
             fileInputName.value = null
-            currentNumber.value = 0
-            currentProgress.value = 0
-            overallProgress.value = 0
             inputFiles.value = []
-            uploadTask.value = ''
+            resetUploadState()
             showUploadModal.value = false
         }, 1500)
     } else {
         fileInputName.value = null
         inputFiles.value = []
-        overallProgress.value = 0
-        currentProgress.value = 0
-        uploadTask.value = ''
-        xhr.value.abort()
+        resetUploadState()
         showUploadModal.value = false
     }
 }

@@ -177,7 +177,7 @@ function rmId(path: string) {
 function newChannel() {
     channel.value.id = configStore.channels.length + 1
     channel.value.name = `Channel ${channel.value.id}`
-    channel.value.preview_url = `${window.location.protocol}//${window.location.host}/${channel.value.id}/live/stream.m3u8`
+    channel.value.preview_url = `${window.location.protocol}//${window.location.host}/public/${channel.value.id}/live/stream.m3u8`
     channel.value.public = `${rmId(channel.value.public)}/${channel.value.id}`
     channel.value.playlists = `${rmId(channel.value.playlists)}/${channel.value.id}`
     channel.value.storage = `${rmId(channel.value.storage)}/${channel.value.id}`
@@ -187,7 +187,7 @@ function newChannel() {
 }
 
 async function addNewChannel() {
-    await fetch('/api/channel/', {
+    await fetch('/api/channel', {
         method: 'POST',
         headers: { ...configStore.contentType, ...authStore.authHeader },
         body: JSON.stringify(channel.value),

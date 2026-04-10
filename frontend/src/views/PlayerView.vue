@@ -563,7 +563,7 @@ async function importPlaylist(imp: boolean) {
 
         playlistStore.isLoading = true
         await fetch(
-            `/api/file/${configStore.channels[configStore.i]?.id}/import/?file=${textFile.value[0].name}&date=${
+            `/api/file/${configStore.channels[configStore.i]?.id}/import?file=${textFile.value[0].name}&date=${
                 listDate.value
             }`,
             {
@@ -602,7 +602,7 @@ async function savePlaylist(save: boolean) {
 
         const saveList = processPlaylist(listDate.value, cloneDeep(playlistStore.playlist), true)
 
-        await fetch(`/api/playlist/${configStore.channels[configStore.i]?.id}/`, {
+        await fetch(`/api/playlist/${configStore.channels[configStore.i]?.id}`, {
             method: 'POST',
             headers: { ...configStore.contentType, ...authStore.authHeader },
             body: JSON.stringify({
