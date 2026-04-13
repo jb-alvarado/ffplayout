@@ -7,10 +7,16 @@ use std::{
 #[cfg(not(debug_assertions))]
 use build_print::info;
 
+#[cfg(all(not(debug_assertions), windows))]
+const NPM_COMMAND: &str = "npm.cmd";
+
+#[cfg(all(not(debug_assertions), not(windows)))]
+const NPM_COMMAND: &str = "npm";
+
 fn main() {
     #[cfg(not(debug_assertions))]
     {
-        let output = Command::new("npm")
+        let output = Command::new(NPM_COMMAND)
             .args(["run", "build"])
             .current_dir("../frontend")
             .stdout(Stdio::piped())
