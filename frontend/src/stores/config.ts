@@ -54,7 +54,7 @@ export const useConfig = defineStore('config', {
             localStorage.removeItem('refresh')
             authStore.isLogin = false
 
-            router.push('/')
+            router.push({ name: 'login' })
         },
 
         async getChannelConfig() {

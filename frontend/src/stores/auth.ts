@@ -17,12 +17,17 @@ export const useAuth = defineStore('auth', {
     getters: {},
     actions: {
         updateToken(token: string, refresh: string) {
+            const decodedToken = jwtDecode<JwtPayloadExt>(token)
+
             localStorage.setItem('token', token)
             localStorage.setItem('refresh', refresh)
 
+            this.isLogin = true
             this.jwtToken = token
             this.jwtRefresh = refresh
             this.authHeader = { Authorization: `Bearer ${token}` }
+            this.id = decodedToken.id
+            this.role = decodedToken.role
         },
 
         removeToken() {
@@ -97,58 +102,6 @@ export const useAuth = defineStore('auth', {
             return code
         },
 
-        async obtainToken(username: string, password: string) {
-            let code = 400
-            const payload = {
-                username,
-                password,
-            }
-
-            await fetch('/auth/login', {
-                method: 'POST',
-                headers: new Headers([['content-type', 'application/json;charset=UTF-8']]),
-                body: JSON.stringify(payload),
-            })
-                .then((resp) => {
-                    code = resp.status
-
-                    if (code === 200) {
-                        return resp.json()
-                    }
-                })
-                .then((response: Token) => {
-                    if (response?.access) {
-                        this.updateToken(response.access, response.refresh)
-                        const decodedToken = jwtDecode<JwtPayloadExt>(response.access)
-                        this.isLogin = true
-                        this.id = decodedToken.id
-                        this.role = decodedToken.role
-                    }
-                })
-                .catch((e) => {
-                    code = typeof e.status === 'number' ? e.status : code
-                })
-
-            return code
-        },
-
-        async obtainUuid() {
-            await fetch('/api/generate-uuid', {
-                method: 'POST',
-                headers: this.authHeader,
-            })
-                .then((resp) => resp.json())
-                .then((response: any) => {
-                    this.uuid = response.uuid
-                })
-                .catch((e) => {
-                    if (e.status === 401) {
-                        this.removeToken()
-                    }
-                    this.uuid = null
-                })
-        },
-
         async refreshToken() {
             await fetch('/auth/refresh', {
                 method: 'POST',
@@ -159,7 +112,6 @@ export const useAuth = defineStore('auth', {
                 .then((response: any) => {
                     if (response.access) {
                         this.updateToken(response.access, this.jwtRefresh)
-                        this.isLogin = true
                     }
                 })
                 .catch(() => {
@@ -222,6 +174,23 @@ export const useAuth = defineStore('auth', {
                 })
                 .catch((e) => {
                     store.msgAlert('error', e)
+                })
+        },
+
+        async obtainUuid() {
+            await fetch('/api/generate-uuid', {
+                method: 'POST',
+                headers: this.authHeader,
+            })
+                .then((resp) => resp.json())
+                .then((response: any) => {
+                    this.uuid = response.uuid
+                })
+                .catch((e) => {
+                    if (e.status === 401) {
+                        this.removeToken()
+                    }
+                    this.uuid = null
                 })
         },
     },

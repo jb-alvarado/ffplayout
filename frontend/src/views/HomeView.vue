@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, ref, onMounted } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useHead } from '@unhead/vue'
+import { useRouter } from 'vue-router'
 
 import { locales } from '@/i18n'
 
@@ -9,50 +10,24 @@ import { useAuth } from '@/stores/auth'
 import { useIndex } from '@/stores/index'
 import { useConfig } from '@/stores/config'
 
-import SvgIcon from '@/components/utils/SvgIcon.vue'
 import SystemStats from '@/components/SystemStats.vue'
 
 const { locale, t } = useI18n()
 const authStore = useAuth()
 const configStore = useConfig()
 const indexStore = useIndex()
+const router = useRouter()
 
 const selectedLang = ref()
 const formError = ref('')
-const showLoginError = ref(false)
-const formUsername = ref('')
-const formPassword = ref('')
 
 onMounted(() => {
     selectedLang.value = locales.find((loc: any) => loc.code === locale.value)
 })
 
 useHead({
-    title: computed(() => (authStore.isLogin ? 'System' : 'Login')),
+    title: 'System',
 })
-
-async function login() {
-    try {
-        const status = await authStore.obtainToken(formUsername.value, formPassword.value)
-
-        formUsername.value = ''
-        formPassword.value = ''
-        formError.value = ''
-
-        if (status === 401 || status === 400 || status === 403) {
-            formError.value = t('alert.wrongLogin')
-            showLoginError.value = true
-
-            setTimeout(() => {
-                showLoginError.value = false
-            }, 3000)
-        }
-
-        await configStore.configInit()
-    } catch (e) {
-        formError.value = e as string
-    }
-}
 
 function toggleTheme() {
     indexStore.darkMode = !indexStore.darkMode
@@ -69,6 +44,7 @@ function toggleTheme() {
 async function logout() {
     try {
         authStore.removeToken()
+        await router.push({ name: 'login' })
     } catch (e) {
         formError.value = e as string
     }
@@ -82,7 +58,7 @@ async function changeLang(lang: any) {
 </script>
 <template>
     <div class="w-full min-h-screen xs:h-full flex justify-center items-center">
-        <div v-if="authStore.isLogin" class="flex flex-col justify-center items-center w-full p-5">
+        <div class="flex flex-col justify-center items-center w-full p-5">
             <SystemStats v-if="configStore.channels.length > 0" />
 
             <div class="w-full flex flex-wrap justify-center gap-1 md:gap-0 md:join mt-5">
@@ -131,47 +107,6 @@ async function changeLang(lang: any) {
                     <i class="bi bi-door-closed text-[18px]" />
                 </button>
             </div>
-        </div>
-        <div v-else class="w-96 min-w-full flex flex-col justify-center items-center px-4">
-            <h1 class="text-6xl xs:text-8xl">ffplayout</h1>
-
-            <form class="mt-10" @submit.prevent="login">
-                <input
-                    v-model="formUsername"
-                    type="text"
-                    name="username"
-                    :placeholder="t('input.username')"
-                    class="input w-full focus:border-base-content/30 focus:outline-base-content/30"
-                    required
-                />
-
-                <input
-                    v-model="formPassword"
-                    type="password"
-                    name="password"
-                    :placeholder="t('input.password')"
-                    class="input w-full mt-5 focus:border-base-content/30 focus:outline-base-content/30"
-                    required
-                />
-
-                <div class="w-full mt-4 grid grid-flow-row-dense grid-cols-12 grid-rows-1 gap-2">
-                    <div class="col-span-3">
-                        <button type="submit" class="btn btn-primary">
-                            {{ t('button.login') }}
-                        </button>
-                    </div>
-                    <div class="col-span-12 sm:col-span-9">
-                        <div
-                            v-if="showLoginError"
-                            role="alert"
-                            class="alert alert-error w-auto rounded-sm z-2 h-12 p-[0.7rem]"
-                        >
-                            <SvgIcon name="error" />
-                            <span>{{ formError }}</span>
-                        </div>
-                    </div>
-                </div>
-            </form>
         </div>
     </div>
 </template>

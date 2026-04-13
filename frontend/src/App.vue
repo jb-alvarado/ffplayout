@@ -4,14 +4,12 @@ import { RouterView, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useHead } from '@unhead/vue'
 
-import { useAuth } from '@/stores/auth'
 import { useIndex } from '@/stores/index'
 
 import AlertMsg from '@/components/utils/AlertMsg.vue'
 import HeaderMenu from '@/components/HeaderMenu.vue'
 
 const { locale } = useI18n()
-const authStore = useAuth()
 const indexStore = useIndex()
 const route = useRoute()
 
@@ -47,14 +45,17 @@ useHead({
         'data-theme': computed(() => (indexStore.darkMode ? 'ffp-dark' : 'ffp-light')),
     },
 })
+
+const showHeader = computed(() => route.meta.showHeader === true)
+const mainClass = computed(() => (showHeader.value ? 'h-[calc(100%-52px)]' : 'h-full'))
 </script>
 <template>
     <div class="min-h-screen bg-base-200">
-        <div v-if="authStore.isLogin && !String(route.name).includes('home')" class="sticky top-0 z-10">
+        <div v-if="showHeader" class="sticky top-0 z-10">
             <HeaderMenu />
         </div>
 
-        <main :class="authStore.isLogin && !String(route.name).includes('home') ? 'h-[calc(100%-52px)]' : 'h-full'">
+        <main :class="mainClass">
             <RouterView />
         </main>
 

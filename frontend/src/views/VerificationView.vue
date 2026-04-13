@@ -14,7 +14,7 @@ const showLoginError = ref(false)
 
 onBeforeMount(async () => {
     if (auth.isLogin) {
-         await router.push({ name: 'home' })
+        await router.push({ name: 'home' })
     }
 })
 
@@ -50,11 +50,11 @@ async function verify() {
 }
 </script>
 <template>
-    <div v-if="!auth.isLogin" class="w-full h-full -mt-3">
-        <RouterLink to="/" class="btn btn-ghost absolute mt-5"> Login </RouterLink>
+    <div v-if="!auth.isLogin" class="relative w-full min-h-screen xs:h-full flex justify-center items-center">
+        <RouterLink :to="{ name: 'login' }" class="btn btn-ghost absolute top-5 left-5"> Login </RouterLink>
         <div class="w-full h-full flex justify-center items-center">
             <div class="w-96 min-w-full flex flex-col justify-center items-center px-4">
-                <h1 class="text-6xl xs:text-8xl">{{ $t('app.title') }}</h1>
+                <h1 class="text-6xl xs:text-8xl">ffplayout</h1>
 
                 <form class="mt-10" @submit.prevent="verify">
                     <input
@@ -76,7 +76,7 @@ async function verify() {
 
                     <div class="w-full mt-4 grid grid-flow-row-dense grid-cols-12 grid-rows-1 gap-2">
                         <div class="col-span-3">
-                            <button type="submit" class="btn btn-accent">
+                            <button type="submit" class="btn btn-primary">
                                 {{ $t('verification.verify') }}
                             </button>
                         </div>

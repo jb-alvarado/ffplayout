@@ -204,7 +204,7 @@ pub async fn login(
                     tokio::spawn(async move {
                         tokio::time::sleep(tokio::time::Duration::from_secs(300)).await; // 5 minutes
                         VERIFICATION_CODES.lock().await.remove(&username_cleanup);
-                        info!("Verification code for {username_cleanup} expired and removed");
+                        debug!("Verification code for {username_cleanup} expired and removed");
                     });
 
                     let text = mail_body(&verification_code);

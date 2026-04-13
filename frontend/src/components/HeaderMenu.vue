@@ -63,7 +63,7 @@ function closeDropdown($event: FocusEvent) {
 
 function logout() {
     authStore.removeToken()
-    router.push('/')
+    router.push({ name: 'login' })
 }
 
 function selectChannel(index: number) {
