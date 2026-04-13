@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { jwtDecode } from 'jwt-decode'
+import { useIndex } from '@/stores/index'
 
 export const useAuth = defineStore('auth', {
     state: () => ({
@@ -7,6 +8,8 @@ export const useAuth = defineStore('auth', {
         jwtToken: '',
         jwtRefresh: '',
         authHeader: {},
+        id: 0,
+        username: '',
         role: '',
         uuid: null as null | string,
     }),
@@ -30,6 +33,68 @@ export const useAuth = defineStore('auth', {
             this.jwtToken = ''
             this.jwtRefresh = ''
             this.authHeader = {}
+            this.id = 0
+        },
+
+        async obtainVerificationCode(password: string) {
+            let code = 400
+
+            const payload = {
+                username: this.username,
+                password,
+            }
+
+            await fetch('/auth/login', {
+                method: 'POST',
+                headers: new Headers([['content-type', 'application/json;charset=UTF-8']]),
+                body: JSON.stringify(payload),
+            })
+                .then((resp) => {
+                    code = resp.status
+                    return resp.json()
+                })
+                .then((response: Token) => {
+                    if (response?.access) {
+                        this.updateToken(response.access, response.refresh)
+                    }
+                })
+                .catch((e) => {
+                    code = typeof e.status === 'number' ? e.status : code
+                })
+
+            return code
+        },
+
+        async verifyCode(verificationCode: string) {
+            let code = 400
+
+            const payload = {
+                username: this.username,
+                code: verificationCode,
+            }
+
+            await fetch('/auth/verify', {
+                method: 'POST',
+                headers: new Headers([['content-type', 'application/json;charset=UTF-8']]),
+                body: JSON.stringify(payload),
+            })
+                .then((resp) => {
+                    code = resp.status
+
+                    if (code === 200) {
+                        return resp.json()
+                    }
+                })
+                .then((response: Token) => {
+                    if (response?.access) {
+                        this.updateToken(response.access, response.refresh)
+                    }
+                })
+                .catch((e) => {
+                    code = typeof e.status === 'number' ? e.status : code
+                })
+
+            return code
         },
 
         async obtainToken(username: string, password: string) {
@@ -56,6 +121,7 @@ export const useAuth = defineStore('auth', {
                         this.updateToken(response.access, response.refresh)
                         const decodedToken = jwtDecode<JwtPayloadExt>(response.access)
                         this.isLogin = true
+                        this.id = decodedToken.id
                         this.role = decodedToken.role
                     }
                 })
@@ -116,6 +182,7 @@ export const useAuth = defineStore('auth', {
                 const expireToken = decodedToken.exp
                 const expireRefresh = decodedRefresh.exp || 0
 
+                this.id = decodedToken.id
                 this.role = decodedToken.role
 
                 if (expireToken && this.jwtToken && expireToken - timestamp > 15) {
@@ -129,6 +196,33 @@ export const useAuth = defineStore('auth', {
             } else {
                 this.removeToken()
             }
+        },
+
+        async selectAuthUser() {
+            const store = useIndex()
+            await fetch(`/api/user/${this.id}`, {
+                headers: this.authHeader,
+            })
+                .then(async (resp) => {
+                    if (resp.status >= 400) {
+                        const msg = (await resp.json())?.error ?? (await resp.text())
+
+                        if (msg.includes('Unauthorized')) {
+                            this.removeToken()
+                        }
+                        throw new Error(msg)
+                    }
+                    return resp.json()
+                })
+                .then((response: any) => {
+                    if (response) {
+                        this.id = response.id
+                        this.username = response.username
+                    }
+                })
+                .catch((e) => {
+                    store.msgAlert('error', e)
+                })
         },
     },
 })

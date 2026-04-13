@@ -81,6 +81,9 @@ pub struct Args {
     #[clap(long, help_heading = Some("General"), help = "Add or update a global admin user")]
     pub user_set: bool,
 
+    #[clap(long, help_heading = Some("General"), help = "Disabling two-factor authentication")]
+    pub disable_two_factor: bool,
+
     #[clap(long, env, help_heading = Some("General"), help = "Path to database file")]
     pub db: Option<PathBuf>,
 

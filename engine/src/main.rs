@@ -169,7 +169,12 @@ async fn main() -> Result<(), ProcessError> {
                 )
                 .await;
             } else if ARGS.test_mail {
-                mail::send_mail(&config.mail, "This is just a test email...".to_string()).await?;
+                mail::send_mail(
+                    &config.mail,
+                    "This is just a test email...".to_string(),
+                    false,
+                )
+                .await?;
             }
         }
     } else {

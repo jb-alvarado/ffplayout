@@ -10,6 +10,7 @@ fn auth_routes() -> Router<AppState> {
     Router::new()
         .route("/login", post(auth::login))
         .route("/refresh", post(auth::refresh))
+        .route("/verify", post(auth::verify))
 }
 
 pub fn routes() -> Router<AppState> {
