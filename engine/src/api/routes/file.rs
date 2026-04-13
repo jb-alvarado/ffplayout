@@ -212,7 +212,7 @@ pub async fn import_playlist(
     Extension(controllers): Extension<std::sync::Arc<RwLock<ChannelController>>>,
     user: AuthUser,
     mut payload: Multipart,
-) -> Result<(StatusCode, String), ServiceError> {
+) -> Result<Json<String>, ServiceError> {
     user.ensure_any_role(&[Role::GlobalAdmin, Role::ChannelAdmin, Role::User])?;
     user.ensure_channel_or_admin(id)?;
 
@@ -239,5 +239,5 @@ pub async fn import_playlist(
 
     fs::remove_file(path).await?;
 
-    Ok((StatusCode::OK, response))
+    Ok(Json(response))
 }

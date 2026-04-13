@@ -1,3 +1,24 @@
+<script setup lang="ts">
+import { computed, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
+import { useHead } from '@unhead/vue'
+
+import ConfigChannel from '@/components/config/ConfigChannel.vue'
+import ConfigAdvanced from '@/components/config/ConfigAdvanced.vue'
+import ConfigPlayout from '@/components/config/ConfigPlayout.vue'
+import ConfigUser from '@/components/config/ConfigUser.vue'
+
+import { useAuth } from '@/stores/auth'
+
+const { t } = useI18n()
+const authStore = useAuth()
+
+useHead({
+    title: computed(() => t('button.configure'))
+})
+
+const activeConf = ref(1)
+</script>
 <template>
     <div class="flex flex-wrap xs:flex-nowrap w-full xs:h-[calc(100vh-60px)] xs:max-h-[calc(100vh-60px)] ps-1">
         <div class="xs:flex-none w-full xs:w-17 join join-horizontal xs:join-vertical me-1 pt-7">
@@ -53,25 +74,3 @@
         </div>
     </div>
 </template>
-
-<script setup lang="ts">
-import { computed, ref } from 'vue'
-import { useI18n } from 'vue-i18n'
-import { useHead } from '@unhead/vue'
-
-import ConfigChannel from '@/components/ConfigChannel.vue'
-import ConfigAdvanced from '@/components/ConfigAdvanced.vue'
-import ConfigPlayout from '@/components/ConfigPlayout.vue'
-import ConfigUser from '@/components/ConfigUser.vue'
-
-import { useAuth } from '@/stores/auth'
-
-const { t } = useI18n()
-const authStore = useAuth()
-
-useHead({
-    title: computed(() => t('button.configure'))
-})
-
-const activeConf = ref(1)
-</script>

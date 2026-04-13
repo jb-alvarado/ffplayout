@@ -1,3 +1,85 @@
+<script setup lang="ts">
+import { computed, ref, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
+import { useHead } from '@unhead/vue'
+
+import { locales } from '@/i18n'
+
+import { useAuth } from '@/stores/auth'
+import { useIndex } from '@/stores/index'
+import { useConfig } from '@/stores/config'
+
+import SvgIcon from '@/components/utils/SvgIcon.vue'
+import SystemStats from '@/components/SystemStats.vue'
+
+const { locale, t } = useI18n()
+const authStore = useAuth()
+const configStore = useConfig()
+const indexStore = useIndex()
+
+const selectedLang = ref()
+const formError = ref('')
+const showLoginError = ref(false)
+const formUsername = ref('')
+const formPassword = ref('')
+
+onMounted(() => {
+    selectedLang.value = locales.find((loc: any) => loc.code === locale.value)
+})
+
+useHead({
+    title: computed(() => (authStore.isLogin ? 'System' : 'Login')),
+})
+
+async function login() {
+    try {
+        const status = await authStore.obtainToken(formUsername.value, formPassword.value)
+
+        formUsername.value = ''
+        formPassword.value = ''
+        formError.value = ''
+
+        if (status === 401 || status === 400 || status === 403) {
+            formError.value = t('alert.wrongLogin')
+            showLoginError.value = true
+
+            setTimeout(() => {
+                showLoginError.value = false
+            }, 3000)
+        }
+
+        await configStore.configInit()
+    } catch (e) {
+        formError.value = e as string
+    }
+}
+
+function toggleTheme() {
+    indexStore.darkMode = !indexStore.darkMode
+
+    if (indexStore.darkMode) {
+        localStorage.setItem('theme', 'dark')
+        // document.documentElement.setAttribute('data-theme', 'dark')
+    } else {
+        localStorage.setItem('theme', 'light')
+        // document.documentElement.setAttribute('data-theme', 'light')
+    }
+}
+
+async function logout() {
+    try {
+        authStore.removeToken()
+    } catch (e) {
+        formError.value = e as string
+    }
+}
+
+async function changeLang(lang: any) {
+    selectedLang.value = lang
+    locale.value = lang.code
+    localStorage.setItem('language', lang.code)
+}
+</script>
 <template>
     <div class="w-full min-h-screen xs:h-full flex justify-center items-center">
         <div v-if="authStore.isLogin" class="flex flex-col justify-center items-center w-full p-5">
@@ -93,86 +175,3 @@
         </div>
     </div>
 </template>
-
-<script setup lang="ts">
-import { computed, ref, onMounted } from 'vue'
-import { useI18n } from 'vue-i18n'
-import { useHead } from '@unhead/vue'
-
-import { locales } from '@/i18n'
-
-import { useAuth } from '@/stores/auth'
-import { useIndex } from '@/stores/index'
-import { useConfig } from '@/stores/config'
-
-import SvgIcon from '@/components/SvgIcon.vue'
-import SystemStats from '@/components/SystemStats.vue'
-
-const { locale, t } = useI18n()
-const authStore = useAuth()
-const configStore = useConfig()
-const indexStore = useIndex()
-
-const selectedLang = ref()
-const formError = ref('')
-const showLoginError = ref(false)
-const formUsername = ref('')
-const formPassword = ref('')
-
-onMounted(() => {
-    selectedLang.value = locales.find((loc: any) => loc.code === locale.value)
-})
-
-useHead({
-    title: computed(() => (authStore.isLogin ? 'System' : 'Login')),
-})
-
-async function login() {
-    try {
-        const status = await authStore.obtainToken(formUsername.value, formPassword.value)
-
-        formUsername.value = ''
-        formPassword.value = ''
-        formError.value = ''
-
-        if (status === 401 || status === 400 || status === 403) {
-            formError.value = t('alert.wrongLogin')
-            showLoginError.value = true
-
-            setTimeout(() => {
-                showLoginError.value = false
-            }, 3000)
-        }
-
-        await configStore.configInit()
-    } catch (e) {
-        formError.value = e as string
-    }
-}
-
-function toggleTheme() {
-    indexStore.darkMode = !indexStore.darkMode
-
-    if (indexStore.darkMode) {
-        localStorage.setItem('theme', 'dark')
-        // document.documentElement.setAttribute('data-theme', 'dark')
-    } else {
-        localStorage.setItem('theme', 'light')
-        // document.documentElement.setAttribute('data-theme', 'light')
-    }
-}
-
-async function logout() {
-    try {
-        authStore.removeToken()
-    } catch (e) {
-        formError.value = e as string
-    }
-}
-
-async function changeLang(lang: any) {
-    selectedLang.value = lang
-    locale.value = lang.code
-    localStorage.setItem('language', lang.code)
-}
-</script>

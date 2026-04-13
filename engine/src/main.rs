@@ -160,13 +160,7 @@ async fn main() -> Result<(), ProcessError> {
         }
     } else {
         error!(
-            "Run ffplayout with correct parameters! For example:\n
-                -l 127.0.0.1\n
-                --channel 1 2
-                --foreground\n
-                --channel 1
-                --generate 2025-01-20 - 2025-01-25\n
-            Run ffplayout -h for more information."
+            "Run ffplayout with correct parameters! For example:\n    -l 127.0.0.1:8787\n    --channel 1 2 --foreground\n    --channel 1 --generate 2025-01-20 - 2025-01-25\nRun ffplayout -h for more information."
         );
     }
 
