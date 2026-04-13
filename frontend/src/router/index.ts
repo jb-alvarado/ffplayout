@@ -56,6 +56,33 @@ const router = createRouter({
             name: 'configure',
             component: () => import('@/views/ConfigureView.vue'),
             meta: { showHeader: true },
+            redirect: { name: 'configure-channel' },
+            children: [
+                {
+                    path: 'channel',
+                    name: 'configure-channel',
+                    component: () => import('@/components/config/ConfigChannel.vue'),
+                    meta: { showHeader: true, roles: ['global_admin', 'channel_admin', 'user'] },
+                },
+                {
+                    path: 'advanced',
+                    name: 'configure-advanced',
+                    component: () => import('@/components/config/ConfigAdvanced.vue'),
+                    meta: { showHeader: true, roles: ['global_admin'] },
+                },
+                {
+                    path: 'playout',
+                    name: 'configure-playout',
+                    component: () => import('@/components/config/ConfigPlayout.vue'),
+                    meta: { showHeader: true, roles: ['global_admin', 'channel_admin'] },
+                },
+                {
+                    path: 'user',
+                    name: 'configure-user',
+                    component: () => import('@/components/config/ConfigUser.vue'),
+                    meta: { showHeader: true, roles: ['global_admin', 'channel_admin', 'user'] },
+                },
+            ],
         },
     ],
 })
@@ -75,9 +102,15 @@ router.beforeEach(async (to) => {
 
     if (auth.isLogin && isPublicRoute) {
         return { name: 'home' }
-    } else {
-        return
     }
+
+    const allowedRoles = to.meta.roles as string[] | undefined
+
+    if (allowedRoles && !allowedRoles.includes(auth.role)) {
+        return { name: 'configure-channel' }
+    }
+
+    return
 })
 
 export default router

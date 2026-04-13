@@ -1,74 +1,62 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useHead } from '@unhead/vue'
-
-import ConfigChannel from '@/components/config/ConfigChannel.vue'
-import ConfigAdvanced from '@/components/config/ConfigAdvanced.vue'
-import ConfigPlayout from '@/components/config/ConfigPlayout.vue'
-import ConfigUser from '@/components/config/ConfigUser.vue'
+import { RouterLink, RouterView, useRoute } from 'vue-router'
 
 import { useAuth } from '@/stores/auth'
 
 const { t } = useI18n()
 const authStore = useAuth()
+const route = useRoute()
 
 useHead({
     title: computed(() => t('button.configure'))
 })
 
-const activeConf = ref(1)
+const isChannelRoute = computed(() => route.name === 'configure-channel')
+const isAdvancedRoute = computed(() => route.name === 'configure-advanced')
+const isPlayoutRoute = computed(() => route.name === 'configure-playout')
+const isUserRoute = computed(() => route.name === 'configure-user')
 </script>
 <template>
     <div class="flex flex-wrap xs:flex-nowrap w-full xs:h-[calc(100vh-60px)] xs:max-h-[calc(100vh-60px)] ps-1">
         <div class="xs:flex-none w-full xs:w-17 join join-horizontal xs:join-vertical me-1 pt-7">
-            <button
+            <RouterLink
+                :to="{ name: 'configure-channel' }"
                 class="join-item btn btn-sm btn-primary duration-500"
-                :class="activeConf === 1 && 'bg-base-100/40'"
-                @click="activeConf = 1"
+                :class="isChannelRoute && 'bg-base-100/40'"
             >
                 {{ t('config.channel') }}
-            </button>
-            <button
+            </RouterLink>
+            <RouterLink
                 v-if="authStore.role === 'global_admin'"
+                :to="{ name: 'configure-advanced' }"
                 class="join-item btn btn-sm btn-primary duration-500"
-                :class="activeConf === 2 && 'bg-base-100/40'"
-                @click="activeConf = 2"
+                :class="isAdvancedRoute && 'bg-base-100/40'"
             >
                 Advanced
-            </button>
-            <button
+            </RouterLink>
+            <RouterLink
                 v-if="authStore.role !== 'user'"
+                :to="{ name: 'configure-playout' }"
                 class="join-item btn btn-sm btn-primary mt-1 duration-500"
-                :class="activeConf === 3 && 'bg-base-100/40'"
-                @click="activeConf = 3"
+                :class="isPlayoutRoute && 'bg-base-100/40'"
             >
                 Playout
-            </button>
-            <button
+            </RouterLink>
+            <RouterLink
+                :to="{ name: 'configure-user' }"
                 class="join-item btn btn-sm btn-primary mt-1 duration-500"
-                :class="activeConf === 4 && 'bg-base-100/40'"
-                @click="activeConf = 4"
+                :class="isUserRoute && 'bg-base-100/40'"
             >
                 {{ t('config.user') }}
-            </button>
+            </RouterLink>
         </div>
         <div class="grow mt-6 px-3 xs:px-6 overflow-auto">
             <div>
-                <div v-if="activeConf === 1" class="w-full flex justify-center">
-                    <ConfigChannel />
-                </div>
-
-                <div v-if="activeConf === 2" class="w-full flex justify-center">
-                    <ConfigAdvanced />
-                </div>
-
-                <div v-else-if="activeConf === 3" class="w-full flex justify-center">
-                    <ConfigPlayout />
-                </div>
-
-                <div v-else-if="activeConf === 4" class="w-full flex justify-center">
-                    <ConfigUser />
+                <div class="w-full flex justify-center">
+                    <RouterView />
                 </div>
             </div>
         </div>
