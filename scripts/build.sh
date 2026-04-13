@@ -28,7 +28,7 @@ for target in "${targets[@]}"; do
         rm -f "ffplayout-v${version}_debian.tar.gz"
 
         docker build -t rust-debian -f ./docker/debian.Dockerfile .
-        docker run -dit --name build-ffplayout -v "$(pwd)":/src rust-debian
+        docker run -dit --name build-ffplayout -v "$(pwd)":/src:z rust-debian
 
         docker exec -it build-ffplayout cargo build --release --target=x86_64-unknown-linux-gnu
         docker exec -it build-ffplayout cargo deb --no-build \

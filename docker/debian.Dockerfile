@@ -1,4 +1,4 @@
-FROM rust:slim-bookworm AS build
+FROM rust:slim-trixie AS build
 WORKDIR /src
 
 RUN apt-get update && apt-get --assume-yes install curl && \
