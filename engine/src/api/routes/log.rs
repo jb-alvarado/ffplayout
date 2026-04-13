@@ -1,4 +1,5 @@
 use axum::extract::{Path, Query};
+use protect_axum::authorities::AuthDetails;
 
 use crate::{
     api::routes::LogReq,
@@ -6,7 +7,7 @@ use crate::{
     utils::{errors::ServiceError, read_log_file},
 };
 
-use super::AuthUser;
+use super::{AuthUser, ensure_any_authority};
 
 /// ### Log file
 ///
@@ -20,8 +21,12 @@ pub async fn get_log(
     Path(id): Path<i32>,
     Query(log): Query<LogReq>,
     user: AuthUser,
+    details: AuthDetails<Role>,
 ) -> Result<String, ServiceError> {
-    user.ensure_any_role(&[Role::GlobalAdmin, Role::ChannelAdmin, Role::User])?;
+    ensure_any_authority(
+        &details,
+        &[&Role::GlobalAdmin, &Role::ChannelAdmin, &Role::User],
+    )?;
     user.ensure_channel_or_admin(id)?;
 
     read_log_file(&id, &log.date, log.timezone, log.download).await

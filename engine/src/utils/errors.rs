@@ -34,6 +34,10 @@ pub enum ServiceError {
 
     #[display("ServiceUnavailable: {_0}")]
     ServiceUnavailable(String),
+
+    // 429 Too Many Requests
+    #[display("ToManyRequests")]
+    ToManyRequests,
 }
 
 impl IntoResponse for ServiceError {
@@ -63,6 +67,12 @@ impl IntoResponse for ServiceError {
             Self::ServiceUnavailable(message) => (
                 StatusCode::SERVICE_UNAVAILABLE,
                 Json(serde_json::json!(message)),
+            )
+                .into_response(),
+
+            Self::ToManyRequests => (
+                StatusCode::TOO_MANY_REQUESTS,
+                Json(serde_json::json!("Too Many Requests.")),
             )
                 .into_response(),
         }

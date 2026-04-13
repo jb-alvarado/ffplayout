@@ -1,21 +1,24 @@
 use axum::{
-    Extension, Json,
-    extract::{Path, Query},
+    Json,
+    extract::{Path, Query, State},
 };
-use tokio::sync::RwLock;
+use protect_axum::authorities::AuthDetails;
 
 use crate::{
-    api::routes::{DateObj, PathsObj},
+    api::{
+        routes::{DateObj, PathsObj},
+        state::AppState,
+    },
     db::models::Role,
     file::norm_abs_path,
-    player::{controller::ChannelController, utils::JsonPlaylist},
+    player::utils::JsonPlaylist,
     utils::{
         errors::ServiceError,
         playlist::{delete_playlist, generate_playlist, read_playlist, write_playlist},
     },
 };
 
-use super::AuthUser;
+use super::{AuthUser, ensure_any_authority};
 
 /// #### ffplayout Playlist Operations
 ///
@@ -26,16 +29,20 @@ use super::AuthUser;
 /// -H 'Content-Type: application/json' -H 'Authorization: Bearer <TOKEN>'
 /// ```
 pub async fn get_playlist(
+    State(state): State<AppState>,
     Path(id): Path<i32>,
     Query(obj): Query<DateObj>,
-    Extension(controllers): Extension<std::sync::Arc<RwLock<ChannelController>>>,
     user: AuthUser,
+    details: AuthDetails<Role>,
 ) -> Result<Json<JsonPlaylist>, ServiceError> {
-    user.ensure_any_role(&[Role::GlobalAdmin, Role::ChannelAdmin, Role::User])?;
+    ensure_any_authority(
+        &details,
+        &[&Role::GlobalAdmin, &Role::ChannelAdmin, &Role::User],
+    )?;
     user.ensure_channel_or_admin(id)?;
 
     let manager = {
-        let guard = controllers.read().await;
+        let guard = state.controller.read().await;
         guard.get(id)
     }
     .ok_or_else(|| ServiceError::BadRequest(format!("Channel {id} not found!")))?;
@@ -56,16 +63,20 @@ pub async fn get_playlist(
 /// --data "{<JSON playlist data>}"
 /// ```
 pub async fn save_playlist(
+    State(state): State<AppState>,
     Path(id): Path<i32>,
-    Extension(controllers): Extension<std::sync::Arc<RwLock<ChannelController>>>,
     user: AuthUser,
+    details: AuthDetails<Role>,
     Json(data): Json<JsonPlaylist>,
 ) -> Result<Json<String>, ServiceError> {
-    user.ensure_any_role(&[Role::GlobalAdmin, Role::ChannelAdmin, Role::User])?;
+    ensure_any_authority(
+        &details,
+        &[&Role::GlobalAdmin, &Role::ChannelAdmin, &Role::User],
+    )?;
     user.ensure_channel_or_admin(id)?;
 
     let manager = {
-        let guard = controllers.read().await;
+        let guard = state.controller.read().await;
         guard.get(id)
     }
     .ok_or_else(|| ServiceError::BadRequest(format!("Channel {id} not found!")))?;
@@ -97,16 +108,20 @@ pub async fn save_playlist(
 ///            {"start": "10:00:00", "duration": "14:00:00", "shuffle": false, "paths": ["path/3", "path/4"]}]}}'
 /// ```
 pub async fn gen_playlist(
+    State(state): State<AppState>,
     Path((id, date)): Path<(i32, String)>,
-    Extension(controllers): Extension<std::sync::Arc<RwLock<ChannelController>>>,
     user: AuthUser,
+    details: AuthDetails<Role>,
     Json(obj): Json<PathsObj>,
 ) -> Result<Json<JsonPlaylist>, ServiceError> {
-    user.ensure_any_role(&[Role::GlobalAdmin, Role::ChannelAdmin, Role::User])?;
+    ensure_any_authority(
+        &details,
+        &[&Role::GlobalAdmin, &Role::ChannelAdmin, &Role::User],
+    )?;
     user.ensure_channel_or_admin(id)?;
 
     let manager = {
-        let guard = controllers.read().await;
+        let guard = state.controller.read().await;
         guard.get(id)
     }
     .ok_or_else(|| ServiceError::BadRequest(format!("Channel {id} not found!")))?;
@@ -144,15 +159,19 @@ pub async fn gen_playlist(
 /// -H 'Content-Type: application/json' -H 'Authorization: Bearer <TOKEN>'
 /// ```
 pub async fn del_playlist(
+    State(state): State<AppState>,
     Path((id, date)): Path<(i32, String)>,
-    Extension(controllers): Extension<std::sync::Arc<RwLock<ChannelController>>>,
     user: AuthUser,
+    details: AuthDetails<Role>,
 ) -> Result<Json<String>, ServiceError> {
-    user.ensure_any_role(&[Role::GlobalAdmin, Role::ChannelAdmin, Role::User])?;
+    ensure_any_authority(
+        &details,
+        &[&Role::GlobalAdmin, &Role::ChannelAdmin, &Role::User],
+    )?;
     user.ensure_channel_or_admin(id)?;
 
     let manager = {
-        let guard = controllers.read().await;
+        let guard = state.controller.read().await;
         guard.get(id)
     }
     .ok_or_else(|| ServiceError::BadRequest(format!("Channel {id} not found!")))?;

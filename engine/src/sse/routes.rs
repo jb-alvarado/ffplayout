@@ -1,17 +1,21 @@
 use axum::{
-    Extension, Json, Router,
-    extract::{Path, Query},
+    Json, Router,
+    extract::{Path, Query, State},
     response::IntoResponse,
     routing::{get, post},
 };
+use protect_axum::authorities::AuthDetails;
 use real::RealIp;
 use serde::{Deserialize, Serialize};
-use tokio::sync::RwLock;
 
-use super::{Endpoint, SseAuthState, UuidData, check_uuid, prune_uuids};
+use super::{Endpoint, UuidData, check_uuid, prune_uuids};
 use crate::{
-    api::routes::AuthUser, db::models::Role, player::controller::ChannelController,
-    sse::broadcast::Broadcaster, utils::errors::ServiceError,
+    api::{
+        routes::{AuthUser, ensure_any_authority},
+        state::AppState,
+    },
+    db::models::Role,
+    utils::errors::ServiceError,
 };
 
 #[derive(Deserialize, Serialize)]
@@ -30,11 +34,11 @@ impl User {
     }
 }
 
-pub fn api_routes() -> Router {
+pub fn api_routes() -> Router<AppState> {
     Router::new().route("/generate-uuid", post(generate_uuid))
 }
 
-pub fn data_routes() -> Router {
+pub fn data_routes() -> Router<AppState> {
     Router::new()
         .route("/validate", get(validate_uuid))
         .route("/event/{id}", get(event_stream))
@@ -42,12 +46,16 @@ pub fn data_routes() -> Router {
 
 pub async fn generate_uuid(
     real_ip: RealIp,
-    Extension(data): Extension<std::sync::Arc<SseAuthState>>,
+    State(state): State<AppState>,
     user: AuthUser,
+    details: AuthDetails<Role>,
 ) -> Result<Json<User>, ServiceError> {
-    user.ensure_any_role(&[Role::GlobalAdmin, Role::ChannelAdmin, Role::User])?;
+    ensure_any_authority(
+        &details,
+        &[&Role::GlobalAdmin, &Role::ChannelAdmin, &Role::User],
+    )?;
 
-    let mut uuids = data.uuids.lock().await;
+    let mut uuids = state.auth_state.uuids.lock().await;
     let ip_address = real_ip.ip().to_string();
     let user_id = (user.id > 0).then_some(user.id);
     let new_uuid = UuidData::new(ip_address, user_id);
@@ -61,10 +69,10 @@ pub async fn generate_uuid(
 
 pub async fn validate_uuid(
     real_ip: RealIp,
-    Extension(data): Extension<std::sync::Arc<SseAuthState>>,
+    State(state): State<AppState>,
     Query(user): Query<User>,
 ) -> Result<Json<&'static str>, ServiceError> {
-    let mut uuids = data.uuids.lock().await;
+    let mut uuids = state.auth_state.uuids.lock().await;
     let ip_address = real_ip.ip().to_string();
 
     match check_uuid(&mut uuids, user.uuid.as_str(), &ip_address) {
@@ -75,24 +83,23 @@ pub async fn validate_uuid(
 
 pub async fn event_stream(
     real_ip: RealIp,
+    State(state): State<AppState>,
     Path(id): Path<i32>,
     Query(user): Query<User>,
-    Extension(broadcaster): Extension<std::sync::Arc<Broadcaster>>,
-    Extension(data): Extension<std::sync::Arc<SseAuthState>>,
-    Extension(controllers): Extension<std::sync::Arc<RwLock<ChannelController>>>,
 ) -> Result<impl IntoResponse, ServiceError> {
-    let mut uuids = data.uuids.lock().await;
+    let mut uuids = state.auth_state.uuids.lock().await;
     let ip_address = real_ip.ip().to_string();
 
     check_uuid(&mut uuids, user.uuid.as_str(), &ip_address)?;
 
     let manager = {
-        let guard = controllers.read().await;
+        let guard = state.controller.read().await;
         guard.get(id)
     }
     .ok_or_else(|| ServiceError::BadRequest(format!("Channel {id} not found!")))?;
 
-    let mut response = broadcaster
+    let mut response = state
+        .broadcaster
         .new_client(manager.clone(), user.endpoint.clone())
         .await
         .into_response();

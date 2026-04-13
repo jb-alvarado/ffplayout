@@ -1,7 +1,9 @@
 use std::sync::{Arc, atomic::AtomicBool};
 
-use axum::{Extension, Router, middleware};
+use axum::{Router, middleware};
+use lazy_limit::{Duration as LDuration, RuleConfig, init_rate_limiter};
 use log::*;
+use protect_axum::GrantsLayer;
 use real::RealIpLayer;
 use tokio::{
     fs::File,
@@ -11,8 +13,11 @@ use tokio::{
 };
 
 use ffplayout::{
-    ARGS, api,
+    ARGS,
+    api::{self, state::AppState},
     db::{db_drop, db_pool, handles, init_globales},
+    extract,
+    middleware::governor::rate_limit,
     player::{
         controller::{ChannelController, ChannelManager},
         utils::{JsonPlaylist, get_date, is_remote, json_validate::validate_playlist},
@@ -34,7 +39,6 @@ use ffplayout::serve::routes::admin_ui_routes;
 
 #[tokio::main]
 async fn main() -> Result<(), ProcessError> {
-    let mail_queues = Arc::new(Mutex::new(vec![]));
     let pool = db_pool().await?;
 
     let mut init = init_args(&pool).await?;
@@ -46,10 +50,16 @@ async fn main() -> Result<(), ProcessError> {
     set_mock_time(&ARGS.fake_time)?;
     init_globales(&pool).await?;
 
-    // Logger handle should be kept alive until the end.
-    let _logger = init_logging(mail_queues.clone())?;
+    let app_state = AppState {
+        auth_state: Arc::new(SseAuthState::default()),
+        broadcaster: Broadcaster::create(),
+        controller: Arc::new(RwLock::new(ChannelController::new())),
+        mail_queues: Arc::new(Mutex::new(vec![])),
+        pool: pool.clone(),
+    };
 
-    let channel_controllers = Arc::new(RwLock::new(ChannelController::new()));
+    // Logger handle should be kept alive until the end.
+    let _logger = init_logging(app_state.mail_queues.clone())?;
 
     if let Some(conn) = &ARGS.listen {
         let channels = handles::select_related_channels(&pool, None).await?;
@@ -68,31 +78,35 @@ async fn main() -> Result<(), ProcessError> {
                 init = false;
             }
 
-            mail_queues.lock().await.push(m_queue);
+            app_state.mail_queues.lock().await.push(m_queue);
 
             if channel_active {
                 manager.start().await?;
             }
 
-            channel_controllers.write().await.add(manager);
+            app_state.controller.write().await.add(manager);
         }
+
+        init_rate_limiter!(
+            default: RuleConfig::new(LDuration::seconds(1), 16), // 16 req/s globally
+            max_memory: Some(64 * 1024 * 1024), // 64MB max memory
+            routes: [
+                ("/auth/", RuleConfig::new(LDuration::minutes(1), 3).match_prefix(true)), // 3 req/min
+            ]
+        )
+        .await;
 
         let listener = TcpListener::bind(conn)
             .await
             .map_err(|e| ProcessError::Input(format!("Failed to bind {conn}: {e}")))?;
 
-        let auth_state = Arc::new(SseAuthState::default());
-        let broadcast_data = Broadcaster::create();
-
         let app = Router::new()
-            .merge(api::path::routes(pool.clone()))
-            .layer(Extension(pool.clone()))
-            .layer(middleware::from_fn(log_middleware))
+            .merge(api::path::routes())
+            .with_state(app_state.clone())
             .layer(RealIpLayer::default())
-            .layer(Extension(mail_queues.clone()))
-            .layer(Extension(channel_controllers.clone()))
-            .layer(Extension(auth_state))
-            .layer(Extension(broadcast_data));
+            .layer(GrantsLayer::with_extractor(extract))
+            .layer(middleware::from_fn(log_middleware))
+            .layer(middleware::from_fn(rate_limit));
 
         #[cfg(not(debug_assertions))]
         let app = app.merge(admin_ui_routes());
@@ -113,8 +127,8 @@ async fn main() -> Result<(), ProcessError> {
             if ARGS.foreground {
                 let m_queue = Arc::new(Mutex::new(MailQueue::new(*channel_id, config.mail)));
 
-                channel_controllers.write().await.add(manager.clone());
-                mail_queues.lock().await.push(m_queue);
+                app_state.controller.write().await.add(manager.clone());
+                app_state.mail_queues.lock().await.push(m_queue);
 
                 manager.foreground_start(index).await?;
             } else if ARGS.generate.is_some() {
@@ -164,7 +178,7 @@ async fn main() -> Result<(), ProcessError> {
         );
     }
 
-    let managers = channel_controllers.read().await.managers.clone();
+    let managers = app_state.controller.read().await.managers.clone();
 
     for manager in &managers {
         manager.channel.lock().await.active = false;

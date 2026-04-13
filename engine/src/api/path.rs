@@ -2,21 +2,19 @@ use axum::{
     Router,
     routing::{delete, get, post, put},
 };
-use sqlx::SqlitePool;
 
 use super::{auth, routes::*};
-use crate::sse;
+use crate::{api::state::AppState, sse};
 
-fn auth_routes(pool: SqlitePool) -> Router {
+fn auth_routes() -> Router<AppState> {
     Router::new()
         .route("/login", post(auth::login))
         .route("/refresh", post(auth::refresh))
-        .with_state(pool)
 }
 
-pub fn routes(pool: SqlitePool) -> Router {
+pub fn routes() -> Router<AppState> {
     Router::new()
-        .nest("/auth", auth_routes(pool))
+        .nest("/auth", auth_routes())
         .nest(
             "/api",
             Router::new()

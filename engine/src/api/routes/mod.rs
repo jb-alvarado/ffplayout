@@ -8,13 +8,14 @@ use axum::{
 };
 use chrono::{Datelike, NaiveDateTime, TimeZone, Utc};
 use chrono_tz::Tz;
+use protect_axum::authorities::{AuthDetails, AuthoritiesCheck};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
 use super::auth::decode_jwt;
 use crate::db::models::Role;
 use crate::utils::mail::MailQueue;
-use crate::utils::{config::Template, naive_date_time_from_str};
+use crate::utils::{config::Template, errors::ServiceError, naive_date_time_from_str};
 
 mod channel;
 mod control;
@@ -44,6 +45,19 @@ pub use user::*;
 
 pub type MailQueues = Arc<Mutex<Vec<Arc<Mutex<MailQueue>>>>>;
 
+pub fn ensure_any_authority(
+    details: &AuthDetails<Role>,
+    roles: &[&Role],
+) -> Result<(), ServiceError> {
+    if details.has_any_authority(roles) {
+        Ok(())
+    } else {
+        Err(ServiceError::Forbidden(
+            "Insufficient permissions".to_string(),
+        ))
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct AuthUser {
     pub id: i32,
@@ -54,19 +68,6 @@ pub struct AuthUser {
 impl AuthUser {
     pub fn is_global_admin(&self) -> bool {
         self.role == Role::GlobalAdmin
-    }
-
-    pub fn ensure_any_role(
-        &self,
-        roles: &[Role],
-    ) -> Result<(), crate::utils::errors::ServiceError> {
-        if roles.contains(&self.role) {
-            Ok(())
-        } else {
-            Err(crate::utils::errors::ServiceError::Forbidden(
-                "Insufficient permissions".to_string(),
-            ))
-        }
     }
 
     pub fn ensure_channel_or_admin(

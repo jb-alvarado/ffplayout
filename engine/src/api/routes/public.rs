@@ -1,7 +1,6 @@
 use axum::{
-    Extension,
     body::Body,
-    extract::Path,
+    extract::{Path, State},
     http::{
         HeaderMap, StatusCode,
         header::{CONTENT_DISPOSITION, CONTENT_TYPE},
@@ -9,10 +8,10 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use path_clean::PathClean;
-use tokio::{fs, sync::RwLock};
+use tokio::fs;
 
 use crate::{
-    player::controller::ChannelController,
+    api::state::AppState,
     utils::{errors::ServiceError, public_path},
 };
 
@@ -24,15 +23,15 @@ use crate::{
 /// curl -X GET http://127.0.0.1:8787/1/live/stream.m3u8
 /// ```
 pub async fn get_public(
+    State(state): State<AppState>,
     Path((id, public, file_stem)): Path<(i32, String, String)>,
-    Extension(controllers): Extension<std::sync::Arc<RwLock<ChannelController>>>,
 ) -> Result<Response, ServiceError> {
     let absolute_path = if file_stem.ends_with(".ts")
         || file_stem.ends_with(".m3u8")
         || file_stem.ends_with(".vtt")
     {
         let manager = {
-            let guard = controllers.read().await;
+            let guard = state.controller.read().await;
             guard.get(id)
         }
         .ok_or_else(|| ServiceError::BadRequest(format!("Channel {id} not found!")))?;

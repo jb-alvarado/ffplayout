@@ -1,19 +1,23 @@
+use std::sync::Arc;
+
 use axum::{
     Router,
     body::Body,
     http::{Request, StatusCode},
     routing::{get, post},
 };
-
 use serde_json::json;
 use sqlx::{Pool, Sqlite, sqlite::SqlitePoolOptions};
+use tokio::sync::{Mutex, RwLock};
 use tower::util::ServiceExt;
 
-use ffplayout::api::auth::login;
-use ffplayout::db::{handles, init_globales, models::User};
-use ffplayout::player::controller::ChannelManager;
-use ffplayout::utils::config::PlayoutConfig;
-// use ffplayout::validator;
+use ffplayout::{
+    api::{auth::login, state::AppState},
+    db::{handles, init_globales, models::User},
+    player::controller::{ChannelController, ChannelManager},
+    sse::{SseAuthState, broadcast::Broadcaster},
+    utils::config::PlayoutConfig,
+};
 
 async fn prepare_config() -> (PlayoutConfig, ChannelManager, Pool<Sqlite>) {
     let pool = SqlitePoolOptions::new()
@@ -70,12 +74,19 @@ async fn test_get() {
 #[tokio::test]
 async fn test_login() {
     let (_, _, pool) = prepare_config().await;
+    let app_state = AppState {
+        auth_state: Arc::new(SseAuthState::default()),
+        broadcaster: Broadcaster::create(),
+        controller: Arc::new(RwLock::new(ChannelController::new())),
+        mail_queues: Arc::new(Mutex::new(vec![])),
+        pool: pool.clone(),
+    };
 
     init_globales(&pool).await.unwrap();
 
     let app = Router::new()
         .route("/auth/login", post(login))
-        .with_state(pool.clone());
+        .with_state(app_state);
 
     let payload = json!({"username": "admin", "password": "admin"});
 

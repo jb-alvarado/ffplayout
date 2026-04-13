@@ -996,7 +996,7 @@ dependencies = [
 
 [[package]]
 name = "ffplayout"
-version = "1.0.1"
+version = "1.1.0"
 dependencies = [
  "argon2",
  "async-walkdir",
@@ -1008,7 +1008,6 @@ dependencies = [
  "derive_more",
  "faccess",
  "flexi_logger",
- "futures-util",
  "iana-time-zone",
  "include_dir",
  "inquire",
@@ -3586,7 +3585,7 @@ dependencies = [
 
 [[package]]
 name = "tests"
-version = "1.0.1"
+version = "1.1.0"
 dependencies = [
  "axum",
  "chrono",

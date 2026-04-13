@@ -1,23 +1,22 @@
-use std::sync::Arc;
+use axum::{
+    Json,
+    extract::{Path, State},
+};
+use protect_axum::authorities::AuthDetails;
 
-use axum::{Extension, Json, extract::Path};
-use sqlx::{Pool, Sqlite};
-use tokio::sync::RwLock;
-
+use super::{AuthUser, ensure_any_authority};
 use crate::{
+    api::state::AppState,
     db::{
         handles,
         models::{Channel, Role},
     },
-    player::controller::ChannelController,
     utils::{
         channels::{create_channel, delete_channel},
         config::get_config,
         errors::ServiceError,
     },
 };
-
-use super::{AuthUser, MailQueues};
 
 /// #### Settings
 ///
@@ -39,14 +38,18 @@ use super::{AuthUser, MailQueues};
 /// }
 /// ```
 pub async fn get_channel(
-    Extension(pool): Extension<Pool<Sqlite>>,
+    State(state): State<AppState>,
     Path(id): Path<i32>,
     user: AuthUser,
+    details: AuthDetails<Role>,
 ) -> Result<Json<Channel>, ServiceError> {
-    user.ensure_any_role(&[Role::GlobalAdmin, Role::ChannelAdmin, Role::User])?;
+    ensure_any_authority(
+        &details,
+        &[&Role::GlobalAdmin, &Role::ChannelAdmin, &Role::User],
+    )?;
     user.ensure_channel_or_admin(id)?;
 
-    if let Ok(channel) = handles::select_channel(&pool, &id).await {
+    if let Ok(channel) = handles::select_channel(&state.pool, &id).await {
         return Ok(Json(channel));
     }
 
@@ -59,12 +62,16 @@ pub async fn get_channel(
 /// curl -X GET http://127.0.0.1:8787/api/channels -H "Authorization: Bearer <TOKEN>"
 /// ```
 pub async fn get_all_channels(
-    Extension(pool): Extension<Pool<Sqlite>>,
+    State(state): State<AppState>,
     user: AuthUser,
+    details: AuthDetails<Role>,
 ) -> Result<Json<Vec<Channel>>, ServiceError> {
-    user.ensure_any_role(&[Role::GlobalAdmin, Role::ChannelAdmin, Role::User])?;
+    ensure_any_authority(
+        &details,
+        &[&Role::GlobalAdmin, &Role::ChannelAdmin, &Role::User],
+    )?;
 
-    if let Ok(channel) = handles::select_related_channels(&pool, Some(user.id)).await {
+    if let Ok(channel) = handles::select_related_channels(&state.pool, Some(user.id)).await {
         return Ok(Json(channel));
     }
 
@@ -79,33 +86,31 @@ pub async fn get_all_channels(
 /// -H "Authorization: Bearer <TOKEN>"
 /// ```
 pub async fn patch_channel(
-    Extension(pool): Extension<Pool<Sqlite>>,
+    State(state): State<AppState>,
     Path(id): Path<i32>,
-    Extension(controllers): Extension<Arc<RwLock<ChannelController>>>,
     user: AuthUser,
-    Json(data): Json<Channel>,
+    details: AuthDetails<Role>,
+    Json(mut data): Json<Channel>,
 ) -> Result<&'static str, ServiceError> {
-    user.ensure_any_role(&[Role::GlobalAdmin, Role::ChannelAdmin])?;
+    ensure_any_authority(&details, &[&Role::GlobalAdmin, &Role::ChannelAdmin])?;
     user.ensure_channel_or_admin(id)?;
 
     let manager = {
-        let guard = controllers.read().await;
+        let guard = state.controller.read().await;
         guard.get(id)
     }
     .ok_or_else(|| ServiceError::BadRequest(format!("Channel {id} not found!")))?;
 
-    let mut data = data;
-
     if !user.is_global_admin() {
-        let channel = handles::select_channel(&pool, &id).await?;
+        let channel = handles::select_channel(&state.pool, &id).await?;
 
         data.public = channel.public;
         data.playlists = channel.playlists;
         data.storage = channel.storage;
     }
 
-    handles::update_channel(&pool, id, data.clone()).await?;
-    let new_config = get_config(&pool, id).await?;
+    handles::update_channel(&state.pool, id, data.clone()).await?;
+    let new_config = get_config(&state.pool, id).await?;
 
     manager.update_config(new_config).await;
     manager.update_channel(&data).await;
@@ -121,15 +126,14 @@ pub async fn patch_channel(
 /// -H "Authorization: Bearer <TOKEN>"
 /// ```
 pub async fn add_channel(
-    Extension(pool): Extension<Pool<Sqlite>>,
-    Extension(controllers): Extension<Arc<RwLock<ChannelController>>>,
-    Extension(queue): Extension<MailQueues>,
-    user: AuthUser,
+    State(state): State<AppState>,
+    _user: AuthUser,
+    details: AuthDetails<Role>,
     Json(data): Json<Channel>,
 ) -> Result<Json<Channel>, ServiceError> {
-    user.ensure_any_role(&[Role::GlobalAdmin])?;
+    ensure_any_authority(&details, &[&Role::GlobalAdmin])?;
 
-    match create_channel(&pool, controllers, queue, data).await {
+    match create_channel(&state.pool, state.controller, state.mail_queues, data).await {
         Ok(c) => Ok(Json(c)),
         Err(e) => Err(e),
     }
@@ -141,15 +145,14 @@ pub async fn add_channel(
 /// curl -X DELETE http://127.0.0.1:8787/api/channel/2 -H "Authorization: Bearer <TOKEN>"
 /// ```
 pub async fn remove_channel(
-    Extension(pool): Extension<Pool<Sqlite>>,
+    State(state): State<AppState>,
     Path(id): Path<i32>,
-    Extension(controllers): Extension<Arc<RwLock<ChannelController>>>,
-    Extension(queue): Extension<MailQueues>,
-    user: AuthUser,
+    _user: AuthUser,
+    details: AuthDetails<Role>,
 ) -> Result<Json<&'static str>, ServiceError> {
-    user.ensure_any_role(&[Role::GlobalAdmin])?;
+    ensure_any_authority(&details, &[&Role::GlobalAdmin])?;
 
-    delete_channel(&pool, id, controllers, queue).await?;
+    delete_channel(&state.pool, id, state.controller, state.mail_queues).await?;
 
     Ok(Json("Delete Channel Success"))
 }

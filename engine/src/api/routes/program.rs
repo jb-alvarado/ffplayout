@@ -1,24 +1,23 @@
 use axum::{
-    Extension, Json,
-    extract::{Path, Query},
+    Json,
+    extract::{Path, Query, State},
 };
 use chrono::{DateTime, Datelike, Local, NaiveDateTime, TimeDelta, TimeZone};
 use log::*;
+use protect_axum::authorities::AuthDetails;
 use regex::Regex;
-use tokio::sync::RwLock;
 
+use super::{AuthUser, ensure_any_authority};
 use crate::{
-    api::routes::{ProgramItem, ProgramObj},
-    db::models::Role,
-    player::{
-        controller::ChannelController,
-        utils::{get_date_range, sec_to_time, time_to_sec},
+    api::{
+        routes::{ProgramItem, ProgramObj},
+        state::AppState,
     },
+    db::models::Role,
+    player::utils::{get_date_range, sec_to_time, time_to_sec},
     utils::{errors::ServiceError, playlist::read_playlist},
     vec_strings,
 };
-
-use super::AuthUser;
 
 /// **Program info**
 ///
@@ -43,16 +42,20 @@ use super::AuthUser;
 /// -H 'Authorization: Bearer <TOKEN>'
 /// ```
 pub async fn get_program(
+    State(state): State<AppState>,
     Path(id): Path<i32>,
     Query(obj): Query<ProgramObj>,
-    Extension(controllers): Extension<std::sync::Arc<RwLock<ChannelController>>>,
     user: AuthUser,
+    details: AuthDetails<Role>,
 ) -> Result<Json<Vec<ProgramItem>>, ServiceError> {
-    user.ensure_any_role(&[Role::GlobalAdmin, Role::ChannelAdmin, Role::User])?;
+    ensure_any_authority(
+        &details,
+        &[&Role::GlobalAdmin, &Role::ChannelAdmin, &Role::User],
+    )?;
     user.ensure_channel_or_admin(id)?;
 
     let manager = {
-        let guard = controllers.read().await;
+        let guard = state.controller.read().await;
         guard.get(id)
     }
     .ok_or_else(|| ServiceError::BadRequest(format!("Channel {id} not found!")))?;

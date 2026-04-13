@@ -11,6 +11,7 @@ pub mod api;
 pub mod db;
 pub mod file;
 pub mod macros;
+pub mod middleware;
 pub mod player;
 pub mod sse;
 pub mod utils;

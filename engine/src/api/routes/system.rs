@@ -1,12 +1,11 @@
-use axum::{Extension, Json, extract::Path};
-use tokio::sync::RwLock;
-
-use crate::{
-    db::models::Role, player::controller::ChannelController, sse::broadcast::Broadcaster,
-    utils::errors::ServiceError,
+use axum::{
+    Json,
+    extract::{Path, State},
 };
+use protect_axum::authorities::AuthDetails;
 
-use super::AuthUser;
+use super::{AuthUser, ensure_any_authority};
+use crate::{api::state::AppState, db::models::Role, utils::errors::ServiceError};
 
 /// ### System Statistics
 ///
@@ -17,23 +16,26 @@ use super::AuthUser;
 /// -H 'Content-Type: application/json' -H 'Authorization: Bearer <TOKEN>'
 /// ```
 pub async fn get_system_stat(
+    State(state): State<AppState>,
     Path(id): Path<i32>,
-    Extension(broadcaster): Extension<std::sync::Arc<Broadcaster>>,
-    Extension(controllers): Extension<std::sync::Arc<RwLock<ChannelController>>>,
     user: AuthUser,
+    details: AuthDetails<Role>,
 ) -> Result<Json<crate::utils::system::SystemStat>, ServiceError> {
-    user.ensure_any_role(&[Role::GlobalAdmin, Role::ChannelAdmin, Role::User])?;
+    ensure_any_authority(
+        &details,
+        &[&Role::GlobalAdmin, &Role::ChannelAdmin, &Role::User],
+    )?;
     user.ensure_channel_or_admin(id)?;
 
     let manager = {
-        let guard = controllers.read().await;
+        let guard = state.controller.read().await;
         guard.get(id)
     }
     .ok_or_else(|| ServiceError::BadRequest(format!("Channel {id} not found!")))?;
 
     let config = manager.config.read().await.clone();
 
-    let stat = broadcaster.system.stat(&config).await;
+    let stat = state.broadcaster.system.stat(&config).await;
 
     Ok(Json(stat))
 }

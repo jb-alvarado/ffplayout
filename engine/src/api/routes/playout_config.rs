@@ -1,23 +1,24 @@
-use std::{path::Path, sync::Arc};
+use std::path::Path;
 
-use axum::{Extension, Json, extract::Path as AxumPath};
-use sqlx::{Pool, Sqlite};
-use tokio::sync::RwLock;
+use axum::{
+    Json,
+    extract::{Path as AxumPath, State},
+};
+use protect_axum::authorities::AuthDetails;
 
+use super::{AuthUser, ensure_any_authority};
 use crate::{
+    api::state::AppState,
     db::{
         handles,
         models::{Output, Role},
     },
     file::norm_abs_path,
-    player::controller::ChannelController,
     utils::{
         config::{PlayoutConfig, get_config},
         errors::ServiceError,
     },
 };
-
-use super::{AuthUser, MailQueues};
 
 /// **Get Config**
 ///
@@ -27,15 +28,19 @@ use super::{AuthUser, MailQueues};
 ///
 /// Response is a JSON object
 pub async fn get_playout_config(
+    State(state): State<AppState>,
     AxumPath(id): AxumPath<i32>,
-    Extension(controllers): Extension<Arc<RwLock<ChannelController>>>,
     user: AuthUser,
+    details: AuthDetails<Role>,
 ) -> Result<Json<PlayoutConfig>, ServiceError> {
-    user.ensure_any_role(&[Role::GlobalAdmin, Role::ChannelAdmin, Role::User])?;
+    ensure_any_authority(
+        &details,
+        &[&Role::GlobalAdmin, &Role::ChannelAdmin, &Role::User],
+    )?;
     user.ensure_channel_or_admin(id)?;
 
     let manager = {
-        let guard = controllers.read().await;
+        let guard = state.controller.read().await;
         guard.get(id)
     }
     .ok_or_else(|| ServiceError::BadRequest(format!("Channel {id} not found!")))?;
@@ -53,18 +58,17 @@ pub async fn get_playout_config(
 /// ```
 #[allow(clippy::too_many_arguments)]
 pub async fn update_playout_config(
-    Extension(pool): Extension<Pool<Sqlite>>,
+    State(state): State<AppState>,
     AxumPath(id): AxumPath<i32>,
-    Extension(controllers): Extension<Arc<RwLock<ChannelController>>>,
-    Extension(mail_queues): Extension<MailQueues>,
     user: AuthUser,
+    details: AuthDetails<Role>,
     Json(mut data): Json<PlayoutConfig>,
 ) -> Result<Json<&'static str>, ServiceError> {
-    user.ensure_any_role(&[Role::GlobalAdmin, Role::ChannelAdmin])?;
+    ensure_any_authority(&details, &[&Role::GlobalAdmin, &Role::ChannelAdmin])?;
     user.ensure_channel_or_admin(id)?;
 
     let manager = {
-        let guard = controllers.read().await;
+        let guard = state.controller.read().await;
         guard.get(id)
     }
     .ok_or_else(|| ServiceError::BadRequest(format!("Channel {id} not found!")))?;
@@ -80,10 +84,10 @@ pub async fn update_playout_config(
     data.storage.filler = filler;
     data.text.font = font;
 
-    handles::update_output(&pool, data.output.id, id, &data.output.output_param).await?;
-    handles::update_configuration(&pool, config_id, data).await?;
-    let new_config = get_config(&pool, id).await?;
-    let mut queues = mail_queues.lock().await;
+    handles::update_output(&state.pool, data.output.id, id, &data.output.output_param).await?;
+    handles::update_configuration(&state.pool, config_id, data).await?;
+    let new_config = get_config(&state.pool, id).await?;
+    let mut queues = state.mail_queues.lock().await;
 
     for queue in queues.iter_mut() {
         let mut queue_lock = queue.lock().await;
@@ -111,14 +115,18 @@ pub async fn update_playout_config(
 ///
 /// Response is a JSON object
 pub async fn get_playout_outputs(
-    Extension(pool): Extension<Pool<Sqlite>>,
+    State(state): State<AppState>,
     AxumPath(id): AxumPath<i32>,
     user: AuthUser,
+    details: AuthDetails<Role>,
 ) -> Result<Json<Vec<Output>>, ServiceError> {
-    user.ensure_any_role(&[Role::GlobalAdmin, Role::ChannelAdmin, Role::User])?;
+    ensure_any_authority(
+        &details,
+        &[&Role::GlobalAdmin, &Role::ChannelAdmin, &Role::User],
+    )?;
     user.ensure_channel_or_admin(id)?;
 
-    if let Ok(outputs) = handles::select_outputs(&pool, id).await {
+    if let Ok(outputs) = handles::select_outputs(&state.pool, id).await {
         return Ok(Json(outputs));
     }
 

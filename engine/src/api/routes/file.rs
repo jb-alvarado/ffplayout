@@ -1,26 +1,30 @@
 use std::env;
 
 use axum::{
-    Extension, Json,
+    Json,
     body::Body,
-    extract::{Multipart, Path, Query},
+    extract::{Multipart, Path, Query, State},
     http::{
         HeaderMap, StatusCode,
         header::{CONTENT_DISPOSITION, CONTENT_TYPE},
     },
     response::{IntoResponse, Response},
 };
-use tokio::{fs, sync::RwLock};
+use protect_axum::authorities::AuthDetails;
+use tokio::fs;
 
 use crate::{
-    api::routes::{FileObj, ImportObj},
+    api::{
+        routes::{FileObj, ImportObj},
+        state::AppState,
+    },
     db::models::Role,
     file::{MoveObject, PathObject, norm_abs_path},
-    player::{controller::ChannelController, utils::import::import_file},
+    player::utils::import::import_file,
     utils::errors::ServiceError,
 };
 
-use super::AuthUser;
+use super::{AuthUser, ensure_any_authority};
 
 /// ### File Operations
 ///
@@ -31,16 +35,20 @@ use super::AuthUser;
 /// -d '{ "source": "/" }' -H 'Authorization: Bearer <TOKEN>'
 /// ```
 pub async fn file_browser(
+    State(state): State<AppState>,
     Path(id): Path<i32>,
-    Extension(controllers): Extension<std::sync::Arc<RwLock<ChannelController>>>,
     user: AuthUser,
+    details: AuthDetails<Role>,
     Json(data): Json<PathObject>,
 ) -> Result<Json<PathObject>, ServiceError> {
-    user.ensure_any_role(&[Role::GlobalAdmin, Role::ChannelAdmin, Role::User])?;
+    ensure_any_authority(
+        &details,
+        &[&Role::GlobalAdmin, &Role::ChannelAdmin, &Role::User],
+    )?;
     user.ensure_channel_or_admin(id)?;
 
     let manager = {
-        let guard = controllers.read().await;
+        let guard = state.controller.read().await;
         guard.get(id)
     }
     .ok_or_else(|| ServiceError::BadRequest(format!("Channel {id} not found!")))?;
@@ -58,16 +66,20 @@ pub async fn file_browser(
 /// -d '{"source": "<FOLDER PATH>"}' -H 'Authorization: Bearer <TOKEN>'
 /// ```
 pub async fn add_dir(
+    State(state): State<AppState>,
     Path(id): Path<i32>,
-    Extension(controllers): Extension<std::sync::Arc<RwLock<ChannelController>>>,
     user: AuthUser,
+    details: AuthDetails<Role>,
     Json(data): Json<PathObject>,
 ) -> Result<StatusCode, ServiceError> {
-    user.ensure_any_role(&[Role::GlobalAdmin, Role::ChannelAdmin, Role::User])?;
+    ensure_any_authority(
+        &details,
+        &[&Role::GlobalAdmin, &Role::ChannelAdmin, &Role::User],
+    )?;
     user.ensure_channel_or_admin(id)?;
 
     let manager = {
-        let guard = controllers.read().await;
+        let guard = state.controller.read().await;
         guard.get(id)
     }
     .ok_or_else(|| ServiceError::BadRequest(format!("Channel {id} not found!")))?;
@@ -84,16 +96,20 @@ pub async fn add_dir(
 /// -d '{"source": "<SOURCE>", "target": "<TARGET>"}' -H 'Authorization: Bearer <TOKEN>'
 /// ```
 pub async fn move_rename(
+    State(state): State<AppState>,
     Path(id): Path<i32>,
-    Extension(controllers): Extension<std::sync::Arc<RwLock<ChannelController>>>,
     user: AuthUser,
+    details: AuthDetails<Role>,
     Json(data): Json<MoveObject>,
 ) -> Result<Json<MoveObject>, ServiceError> {
-    user.ensure_any_role(&[Role::GlobalAdmin, Role::ChannelAdmin, Role::User])?;
+    ensure_any_authority(
+        &details,
+        &[&Role::GlobalAdmin, &Role::ChannelAdmin, &Role::User],
+    )?;
     user.ensure_channel_or_admin(id)?;
 
     let manager = {
-        let guard = controllers.read().await;
+        let guard = state.controller.read().await;
         guard.get(id)
     }
     .ok_or_else(|| ServiceError::BadRequest(format!("Channel {id} not found!")))?;
@@ -111,16 +127,20 @@ pub async fn move_rename(
 /// -d '{"source": "<SOURCE>"}' -H 'Authorization: Bearer <TOKEN>'
 /// ```
 pub async fn remove(
+    State(state): State<AppState>,
     Path(id): Path<i32>,
-    Extension(controllers): Extension<std::sync::Arc<RwLock<ChannelController>>>,
     user: AuthUser,
+    details: AuthDetails<Role>,
     Json(data): Json<PathObject>,
 ) -> Result<StatusCode, ServiceError> {
-    user.ensure_any_role(&[Role::GlobalAdmin, Role::ChannelAdmin, Role::User])?;
+    ensure_any_authority(
+        &details,
+        &[&Role::GlobalAdmin, &Role::ChannelAdmin, &Role::User],
+    )?;
     user.ensure_channel_or_admin(id)?;
 
     let manager = {
-        let guard = controllers.read().await;
+        let guard = state.controller.read().await;
         guard.get(id)
     }
     .ok_or_else(|| ServiceError::BadRequest(format!("Channel {id} not found!")))?;
@@ -141,17 +161,21 @@ pub async fn remove(
 /// ```
 #[allow(clippy::too_many_arguments)]
 pub async fn upload_file(
+    State(state): State<AppState>,
     Path(id): Path<i32>,
     Query(obj): Query<FileObj>,
-    Extension(controllers): Extension<std::sync::Arc<RwLock<ChannelController>>>,
     user: AuthUser,
+    details: AuthDetails<Role>,
     payload: Multipart,
 ) -> Result<StatusCode, ServiceError> {
-    user.ensure_any_role(&[Role::GlobalAdmin, Role::ChannelAdmin, Role::User])?;
+    ensure_any_authority(
+        &details,
+        &[&Role::GlobalAdmin, &Role::ChannelAdmin, &Role::User],
+    )?;
     user.ensure_channel_or_admin(id)?;
 
     let manager = {
-        let guard = controllers.read().await;
+        let guard = state.controller.read().await;
         guard.get(id)
     }
     .ok_or_else(|| ServiceError::BadRequest(format!("Channel {id} not found!")))?;
@@ -176,11 +200,11 @@ pub async fn upload_file(
 /// curl -X GET http://127.0.0.1:8787/file/1/path/to/file.mp4
 /// ```
 pub async fn get_file(
+    State(state): State<AppState>,
     Path((id, filename)): Path<(i32, String)>,
-    Extension(controllers): Extension<std::sync::Arc<RwLock<ChannelController>>>,
 ) -> Result<Response, ServiceError> {
     let manager = {
-        let guard = controllers.read().await;
+        let guard = state.controller.read().await;
         guard.get(id)
     }
     .ok_or_else(|| ServiceError::BadRequest(format!("Channel {id} not found!")))?;
@@ -207,17 +231,21 @@ pub async fn get_file(
 /// -F "file=@list.m3u"
 /// ```
 pub async fn import_playlist(
+    State(state): State<AppState>,
     Path(id): Path<i32>,
     Query(obj): Query<ImportObj>,
-    Extension(controllers): Extension<std::sync::Arc<RwLock<ChannelController>>>,
     user: AuthUser,
+    details: AuthDetails<Role>,
     mut payload: Multipart,
 ) -> Result<Json<String>, ServiceError> {
-    user.ensure_any_role(&[Role::GlobalAdmin, Role::ChannelAdmin, Role::User])?;
+    ensure_any_authority(
+        &details,
+        &[&Role::GlobalAdmin, &Role::ChannelAdmin, &Role::User],
+    )?;
     user.ensure_channel_or_admin(id)?;
 
     let manager = {
-        let guard = controllers.read().await;
+        let guard = state.controller.read().await;
         guard.get(id)
     }
     .ok_or_else(|| ServiceError::BadRequest(format!("Channel {id} not found!")))?;

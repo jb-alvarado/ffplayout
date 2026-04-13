@@ -4,11 +4,14 @@ use chrono::{TimeDelta, Utc};
 use jsonwebtoken::{self, DecodingKey, EncodingKey, Header, Validation};
 use log::*;
 use serde::{Deserialize, Serialize};
-use sqlx::SqlitePool;
 use tokio::task;
 
 use crate::{
-    db::{GLOBAL_SETTINGS, handles, models::Role, models::User},
+    api::state::AppState,
+    db::{
+        GLOBAL_SETTINGS, handles,
+        models::{Role, User},
+    },
     utils::errors::ServiceError,
 };
 
@@ -85,13 +88,13 @@ pub async fn decode_jwt(token: &str) -> Result<Claims, ServiceError> {
 /// }
 /// ```
 pub async fn login(
-    State(pool): State<SqlitePool>,
+    State(state): State<AppState>,
     AxumJson(credentials): AxumJson<Credentials>,
 ) -> Result<impl IntoResponse, ServiceError> {
     let username = credentials.username.clone();
     let password = credentials.password.clone();
 
-    match handles::select_login(&pool, &username).await {
+    match handles::select_login(&state.pool, &username).await {
         Ok(mut user) => {
             if user.username.is_empty() {
                 return Ok((
@@ -103,7 +106,7 @@ pub async fn login(
                     .into_response());
             }
 
-            let role = handles::select_role(&pool, &user.role_id.unwrap_or_default()).await?;
+            let role = handles::select_role(&state.pool, &user.role_id.unwrap_or_default()).await?;
 
             let pass_hash = user.password.clone();
             let cred_password = password.clone();
@@ -172,7 +175,7 @@ pub async fn login(
 /// }
 /// ```
 pub async fn refresh(
-    State(pool): State<SqlitePool>,
+    State(state): State<AppState>,
     AxumJson(data): AxumJson<TokenRefreshRequest>,
 ) -> Result<impl IntoResponse, ServiceError> {
     let refresh_t = &data.refresh;
@@ -182,7 +185,7 @@ pub async fn refresh(
             let user_id = claims.id;
             let role = claims.role;
 
-            if let Ok(user) = handles::select_user(&pool, user_id).await {
+            if let Ok(user) = handles::select_user(&state.pool, user_id).await {
                 let access_claims = Claims::new(user.clone(), role.clone(), ACCESS_LIFETIME);
                 let access_token = encode_jwt(access_claims).await?;
 

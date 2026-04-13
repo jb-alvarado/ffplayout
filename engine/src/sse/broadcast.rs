@@ -39,8 +39,9 @@ impl Client {
     }
 }
 
+#[derive(Clone)]
 pub struct Broadcaster {
-    inner: Mutex<BroadcasterInner>,
+    inner: Arc<Mutex<BroadcasterInner>>,
     pub system: SystemStat,
 }
 
@@ -53,7 +54,7 @@ impl Broadcaster {
     /// Constructs new broadcaster and spawns ping loop.
     pub fn create() -> Arc<Self> {
         let this = Arc::new(Self {
-            inner: Mutex::new(BroadcasterInner::default()),
+            inner: Arc::new(Mutex::new(BroadcasterInner::default())),
             system: SystemStat::new(),
         });
 

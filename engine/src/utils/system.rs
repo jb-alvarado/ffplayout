@@ -9,7 +9,7 @@ use crate::utils::config::PlayoutConfig;
 
 const IGNORE_INTERFACES: [&str; 7] = ["docker", "lxdbr", "tab", "tun", "virbr", "veth", "vnet"];
 
-#[derive(Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, Serialize)]
 pub struct SystemStat {
     pub cpu: Cpu,
     pub load: Load,
@@ -26,34 +26,34 @@ pub struct SystemStat {
     info_sys: Arc<Mutex<System>>,
 }
 
-#[derive(Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, Serialize)]
 pub struct Cpu {
     pub cores: f32,
     pub usage: f32,
 }
 
-#[derive(Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, Serialize)]
 pub struct Storage {
     pub path: String,
     pub total: u64,
     pub used: u64,
 }
 
-#[derive(Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, Serialize)]
 pub struct Load {
     pub one: f64,
     pub five: f64,
     pub fifteen: f64,
 }
 
-#[derive(Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, Serialize)]
 pub struct Memory {
     pub total: u64,
     pub used: u64,
     pub free: u64,
 }
 
-#[derive(Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, Serialize)]
 pub struct Network {
     pub name: String,
     pub current_in: u64,
@@ -70,7 +70,7 @@ pub struct MySystem {
     pub ffp_version: Option<String>,
 }
 
-#[derive(Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, Serialize)]
 pub struct Swap {
     pub total: u64,
     pub used: u64,

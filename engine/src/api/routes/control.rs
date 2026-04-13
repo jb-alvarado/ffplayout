@@ -1,12 +1,15 @@
 use std::sync::atomic::Ordering;
 
-use axum::{Extension, Json, extract::Path};
-use sqlx::{Pool, Sqlite};
-use tokio::sync::RwLock;
+use axum::{
+    Json,
+    extract::{Path, State},
+};
+use protect_axum::authorities::AuthDetails;
 
 use crate::{
+    api::state::AppState,
     db::models::Role,
-    player::{controller::ChannelController, utils::get_data_map},
+    player::utils::get_data_map,
     utils::{
         TextFilter,
         control::{ControlParams, Process, ProcessCtl, control_state, send_message},
@@ -14,7 +17,7 @@ use crate::{
     },
 };
 
-use super::AuthUser;
+use super::{AuthUser, ensure_any_authority};
 
 /// ### ffplayout controlling
 ///
@@ -32,16 +35,20 @@ use super::AuthUser;
 /// -d '{"text": "Hello from ffplayout", "x": "(w-text_w)/2", "y": "(h-text_h)/2", fontsize": "24", "line_spacing": "4", "fontcolor": "#ffffff", "box": "1", "boxcolor": "#000000", "boxborderw": "4", "alpha": "1.0"}'
 /// ```
 pub async fn send_text_message(
+    State(state): State<AppState>,
     Path(id): Path<i32>,
-    Extension(controllers): Extension<std::sync::Arc<RwLock<ChannelController>>>,
     user: AuthUser,
+    details: AuthDetails<Role>,
     Json(data): Json<TextFilter>,
 ) -> Result<Json<serde_json::Map<String, serde_json::Value>>, ServiceError> {
-    user.ensure_any_role(&[Role::GlobalAdmin, Role::ChannelAdmin, Role::User])?;
+    ensure_any_authority(
+        &details,
+        &[&Role::GlobalAdmin, &Role::ChannelAdmin, &Role::User],
+    )?;
     user.ensure_channel_or_admin(id)?;
 
     let manager = {
-        let guard = controllers.read().await;
+        let guard = state.controller.read().await;
         guard.get(id)
     }
     .ok_or_else(|| ServiceError::BadRequest(format!("Channel {id} not found!")))?;
@@ -63,17 +70,20 @@ pub async fn send_text_message(
 /// -d '{ "command": "reset" }' -H 'Authorization: Bearer <TOKEN>'
 /// ```
 pub async fn control_playout(
-    Extension(pool): Extension<Pool<Sqlite>>,
+    State(state): State<AppState>,
     Path(id): Path<i32>,
-    Extension(controllers): Extension<std::sync::Arc<RwLock<ChannelController>>>,
     user: AuthUser,
+    details: AuthDetails<Role>,
     Json(control): Json<ControlParams>,
 ) -> Result<Json<serde_json::Map<String, serde_json::Value>>, ServiceError> {
-    user.ensure_any_role(&[Role::GlobalAdmin, Role::ChannelAdmin, Role::User])?;
+    ensure_any_authority(
+        &details,
+        &[&Role::GlobalAdmin, &Role::ChannelAdmin, &Role::User],
+    )?;
     user.ensure_channel_or_admin(id)?;
 
     let manager = {
-        let guard = controllers.read().await;
+        let guard = state.controller.read().await;
         guard.get(id)
     }
     .ok_or_else(|| ServiceError::BadRequest(format!("Channel {id} not found!")))?;
@@ -86,7 +96,7 @@ pub async fn control_playout(
 
     manager.is_processing.store(true, Ordering::SeqCst);
 
-    let resp = match control_state(&pool, &manager, &control.control).await {
+    let resp = match control_state(&state.pool, &manager, &control.control).await {
         Ok(res) => Ok(Json(res)),
         Err(e) => Err(e),
     };
@@ -121,15 +131,19 @@ pub async fn control_playout(
 ///     }
 /// ```
 pub async fn media_current(
+    State(state): State<AppState>,
     Path(id): Path<i32>,
-    Extension(controllers): Extension<std::sync::Arc<RwLock<ChannelController>>>,
     user: AuthUser,
+    details: AuthDetails<Role>,
 ) -> Result<Json<serde_json::Map<String, serde_json::Value>>, ServiceError> {
-    user.ensure_any_role(&[Role::GlobalAdmin, Role::ChannelAdmin, Role::User])?;
+    ensure_any_authority(
+        &details,
+        &[&Role::GlobalAdmin, &Role::ChannelAdmin, &Role::User],
+    )?;
     user.ensure_channel_or_admin(id)?;
 
     let manager = {
-        let guard = controllers.read().await;
+        let guard = state.controller.read().await;
         guard.get(id)
     }
     .ok_or_else(|| ServiceError::BadRequest(format!("Channel {id} not found!")))?;
@@ -153,16 +167,20 @@ pub async fn media_current(
 /// -d '{"command": "start"}'
 /// ```
 pub async fn process_control(
+    State(state): State<AppState>,
     Path(id): Path<i32>,
-    Extension(controllers): Extension<std::sync::Arc<RwLock<ChannelController>>>,
     user: AuthUser,
+    details: AuthDetails<Role>,
     Json(proc): Json<Process>,
 ) -> Result<Json<&'static str>, ServiceError> {
-    user.ensure_any_role(&[Role::GlobalAdmin, Role::ChannelAdmin, Role::User])?;
+    ensure_any_authority(
+        &details,
+        &[&Role::GlobalAdmin, &Role::ChannelAdmin, &Role::User],
+    )?;
     user.ensure_channel_or_admin(id)?;
 
     let manager = {
-        let guard = controllers.read().await;
+        let guard = state.controller.read().await;
         guard.get(id)
     }
     .ok_or_else(|| ServiceError::BadRequest(format!("Channel {id} not found!")))?;

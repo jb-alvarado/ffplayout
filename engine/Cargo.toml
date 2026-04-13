@@ -29,7 +29,6 @@ clap = { version = "4.3", features = ["derive", "env"] }
 derive_more = { version = "2", features = ["display"] }
 faccess = "0.2"
 flexi_logger = { version = "0.31", features = ["async", "colors", "kv"] }
-futures-util = { version = "0.3", default-features = false, features = ["std"] }
 iana-time-zone = "0.1"
 include_dir = "0.7"
 inquire = "0.9"

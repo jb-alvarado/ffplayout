@@ -1,15 +1,18 @@
-use axum::{Extension, Json, extract::Path};
-use sqlx::{Pool, Sqlite};
+use axum::{
+    Json,
+    extract::{Path, State},
+};
+use protect_axum::authorities::AuthDetails;
 
+use super::{AuthUser, ensure_any_authority};
 use crate::{
+    api::state::AppState,
     db::{
         handles,
         models::{Role, TextPreset},
     },
     utils::errors::ServiceError,
 };
-
-use super::AuthUser;
 
 /// #### Text Presets
 ///
@@ -22,14 +25,18 @@ use super::AuthUser;
 /// -H 'Authorization: Bearer <TOKEN>'
 /// ```
 pub async fn get_presets(
-    Extension(pool): Extension<Pool<Sqlite>>,
+    State(state): State<AppState>,
     Path(id): Path<i32>,
     user: AuthUser,
+    details: AuthDetails<Role>,
 ) -> Result<Json<Vec<TextPreset>>, ServiceError> {
-    user.ensure_any_role(&[Role::GlobalAdmin, Role::ChannelAdmin, Role::User])?;
+    ensure_any_authority(
+        &details,
+        &[&Role::GlobalAdmin, &Role::ChannelAdmin, &Role::User],
+    )?;
     user.ensure_channel_or_admin(id)?;
 
-    if let Ok(presets) = handles::select_presets(&pool, id).await {
+    if let Ok(presets) = handles::select_presets(&state.pool, id).await {
         return Ok(Json(presets));
     }
 
@@ -44,15 +51,19 @@ pub async fn get_presets(
 /// -H 'Authorization: Bearer <TOKEN>'
 /// ```
 pub async fn update_preset(
-    Extension(pool): Extension<Pool<Sqlite>>,
+    State(state): State<AppState>,
     Path((channel, id)): Path<(i32, i32)>,
     user: AuthUser,
+    details: AuthDetails<Role>,
     Json(data): Json<TextPreset>,
 ) -> Result<&'static str, ServiceError> {
-    user.ensure_any_role(&[Role::GlobalAdmin, Role::ChannelAdmin, Role::User])?;
+    ensure_any_authority(
+        &details,
+        &[&Role::GlobalAdmin, &Role::ChannelAdmin, &Role::User],
+    )?;
     user.ensure_channel_or_admin(channel)?;
 
-    if handles::update_preset(&pool, &id, data).await.is_ok() {
+    if handles::update_preset(&state.pool, &id, data).await.is_ok() {
         return Ok("Update Success");
     }
 
@@ -67,15 +78,19 @@ pub async fn update_preset(
 /// -H 'Authorization: Bearer <TOKEN>'
 /// ```
 pub async fn add_preset(
-    Extension(pool): Extension<Pool<Sqlite>>,
+    State(state): State<AppState>,
     Path(id): Path<i32>,
     user: AuthUser,
+    details: AuthDetails<Role>,
     Json(data): Json<TextPreset>,
 ) -> Result<&'static str, ServiceError> {
-    user.ensure_any_role(&[Role::GlobalAdmin, Role::ChannelAdmin, Role::User])?;
+    ensure_any_authority(
+        &details,
+        &[&Role::GlobalAdmin, &Role::ChannelAdmin, &Role::User],
+    )?;
     user.ensure_channel_or_admin(id)?;
 
-    if handles::insert_preset(&pool, data).await.is_ok() {
+    if handles::insert_preset(&state.pool, data).await.is_ok() {
         return Ok("Add preset Success");
     }
 
@@ -89,14 +104,18 @@ pub async fn add_preset(
 /// -H 'Authorization: Bearer <TOKEN>'
 /// ```
 pub async fn delete_preset(
-    Extension(pool): Extension<Pool<Sqlite>>,
+    State(state): State<AppState>,
     Path((channel, id)): Path<(i32, i32)>,
     user: AuthUser,
+    details: AuthDetails<Role>,
 ) -> Result<&'static str, ServiceError> {
-    user.ensure_any_role(&[Role::GlobalAdmin, Role::ChannelAdmin, Role::User])?;
+    ensure_any_authority(
+        &details,
+        &[&Role::GlobalAdmin, &Role::ChannelAdmin, &Role::User],
+    )?;
     user.ensure_channel_or_admin(channel)?;
 
-    if handles::delete_preset(&pool, &id).await.is_ok() {
+    if handles::delete_preset(&state.pool, &id).await.is_ok() {
         return Ok("Delete preset Success");
     }
 
