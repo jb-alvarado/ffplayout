@@ -943,7 +943,7 @@ pub async fn get_config(
 
         let mut template: Template = serde_json::from_slice(&buffer)?;
 
-        template.sources.sort_by(|d1, d2| d1.start.cmp(&d2.start));
+        template.sources.sort_by_key(|d1| d1.start);
 
         config.general.template = Some(template);
     }

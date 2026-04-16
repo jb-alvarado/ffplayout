@@ -1,6 +1,6 @@
 {
   "name": "frontend",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Web UI for ffplayout",
   "private": true,
   "type": "module",
@@ -14,7 +14,7 @@
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.2.2",
-    "@unhead/vue": "^3.0.3",
+    "@unhead/vue": "^3.0.4",
     "@vueform/multiselect": "^2.6.11",
     "@vuepic/vue-datepicker": "^12.1.0",
     "@vueuse/core": "^14.2.1",
