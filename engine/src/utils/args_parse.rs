@@ -191,7 +191,7 @@ pub struct Args {
     pub skip_validation: bool,
 
     #[clap(long, hide = true, help = "Enable developer task lifecycle metrics")]
-    pub dev_metrics: bool,
+    pub dev_metrics: Option<bool>,
 
     #[clap(long, hide = true, help = "Set fake time (for debugging)")]
     pub fake_time: Option<String>,

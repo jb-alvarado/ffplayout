@@ -933,7 +933,10 @@ pub async fn get_config(
     config.general.generate = args.generate;
     config.general.validate = args.validate;
     config.general.skip_validation = args.skip_validation;
-    config.general.dev_metrics = args.dev_metrics;
+
+    if let Some(dev_metrics) = args.dev_metrics {
+        config.general.dev_metrics = dev_metrics;
+    }
 
     if let Some(template_file) = args.template {
         let mut f = fs::File::options()
