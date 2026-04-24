@@ -1,5 +1,7 @@
 use std::{
-    cmp, fmt,
+    cmp,
+    collections::HashSet,
+    fmt,
     path::Path,
     sync::{
         Arc,
@@ -33,6 +35,7 @@ use crate::{
         config::{OutputMode, PlayoutConfig},
         errors::ServiceError,
         logging::Target,
+        sizeof_fmt,
     },
 };
 
@@ -352,26 +355,30 @@ impl ChannelManager {
                     _ = token.cancelled() => break,
                     _ = sleep(Duration::from_secs(60)) => {
                         let metrics = tokio::runtime::Handle::current().metrics();
-                        let thread_count = if let (Some(pid), Some(system)) = (pid, system.as_mut()) {
+                        let (thread_count, rss) = if let (Some(pid), Some(system)) = (pid, system.as_mut()) {
                             tokio::task::block_in_place(|| {
                                 system.refresh_processes_specifics(
                                     ProcessesToUpdate::Some(&[pid]),
                                     false,
-                                    ProcessRefreshKind::nothing().with_tasks(),
+                                    ProcessRefreshKind::nothing().with_tasks().with_memory(),
                                 );
                             });
 
-                            system
-                                .process(pid)
-                                .and_then(|process| process.tasks())
-                                .map_or(0, |tasks| tasks.len())
+                            if let Some(process) = system.process(pid) {
+                                let threads = process.tasks().map_or(0, HashSet::len);
+                                let rss = sizeof_fmt(process.memory() as f64);
+
+                                (threads, rss)
+                            } else {
+                                (0, String::from("0.0"))
+                            }
                         } else {
-                            0
+                            (0, String::from("0.0"))
                         };
                         debug!(
                             target: Target::file(),
                             channel = manager.id;
-                            "<span class=\"log-gray\">[Dev Metrics]</span> task=<span class=\"log-addr\">runtime_snapshot</span> event=<span class=\"log-addr\">tick</span> generation=<span class=\"log-number\">{generation}</span> tokio_alive=<span class=\"log-number\">{}</span> tokio_workers=<span class=\"log-number\">{}</span> global_queue_depth=<span class=\"log-number\">{}</span> threads=<span class=\"log-number\">{thread_count}</span>",
+                            "<span class=\"log-gray\">[Dev Metrics]</span> task=<span class=\"log-addr\">runtime_snapshot</span> event=<span class=\"log-addr\">tick</span> generation=<span class=\"log-number\">{generation}</span> tokio_alive=<span class=\"log-number\">{}</span> tokio_workers=<span class=\"log-number\">{}</span> global_queue_depth=<span class=\"log-number\">{}</span> threads=<span class=\"log-number\">{thread_count}</span> rss=<span class=\"log-number\">{rss}</span>",
                             metrics.num_alive_tasks(),
                             metrics.num_workers(),
                             metrics.global_queue_depth(),
