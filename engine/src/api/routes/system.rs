@@ -4,8 +4,14 @@ use axum::{
 };
 use protect_axum::authorities::AuthDetails;
 
-use super::{AuthUser, ensure_any_authority};
-use crate::{api::state::AppState, db::models::Role, utils::errors::ServiceError};
+use crate::{
+    api::{
+        routes::{AuthUser, ensure_any_authority},
+        state::AppState,
+    },
+    db::models::Role,
+    utils::errors::ServiceError,
+};
 
 /// ### System Statistics
 ///

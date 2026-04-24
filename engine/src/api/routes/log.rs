@@ -2,12 +2,10 @@ use axum::extract::{Path, Query};
 use protect_axum::authorities::AuthDetails;
 
 use crate::{
-    api::routes::LogReq,
+    api::routes::{AuthUser, LogReq, ensure_any_authority},
     db::models::Role,
     utils::{errors::ServiceError, read_log_file},
 };
-
-use super::{AuthUser, ensure_any_authority};
 
 /// ### Log file
 ///

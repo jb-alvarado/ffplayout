@@ -4,16 +4,18 @@ use log::*;
 use sqlx::{Pool, Sqlite};
 use tokio::sync::{Mutex, RwLock};
 
-use crate::db::{
-    handles,
-    models::{self, Channel},
-};
-use crate::player::controller::{ChannelController, ChannelManager};
-use crate::utils::{
-    advanced_config::{AdvancedConfig, DecoderConfig, FilterConfig, IngestConfig},
-    config::get_config,
-    errors::ServiceError,
-    mail::MailQueue,
+use crate::{
+    db::{
+        handles,
+        models::{self, Channel},
+    },
+    player::controller::{ChannelController, ChannelManager},
+    utils::{
+        advanced_config::{AdvancedConfig, DecoderConfig, FilterConfig, IngestConfig},
+        config::get_config,
+        errors::ServiceError,
+        mail::MailQueue,
+    },
 };
 
 use super::config::OutputMode;

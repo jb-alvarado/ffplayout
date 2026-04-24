@@ -28,17 +28,17 @@ use log::{kv::Value, *};
 use regex::{Captures, Regex};
 use tokio::sync::Mutex;
 
-use super::ARGS;
-
-use crate::db::GLOBAL_SETTINGS;
-use crate::utils::{
-    ServiceError,
-    config::FFMPEG_UNRECOVERABLE_ERRORS,
-    mail::{MailQueue, mail_queue},
-    time_machine::time_now,
+use crate::{
+    ARGS,
+    db::GLOBAL_SETTINGS,
+    player::controller::ProcessUnit,
+    utils::{
+        ServiceError,
+        config::FFMPEG_UNRECOVERABLE_ERRORS,
+        mail::{MailQueue, mail_queue},
+        time_machine::time_now,
+    },
 };
-
-use crate::player::controller::ProcessUnit;
 
 const TIME_FORMAT: &str = "%Y-%m-%d %H:%M:%S%.6f%:z";
 

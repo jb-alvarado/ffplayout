@@ -11,6 +11,7 @@ use tokio::{
     net::TcpListener,
     sync::{Mutex, RwLock},
 };
+use tokio_util::sync::CancellationToken;
 
 use ffplayout::{
     ARGS,
@@ -166,6 +167,7 @@ async fn main() -> Result<(), ProcessError> {
                     Arc::new(Mutex::new(Vec::new())),
                     playlist,
                     Arc::new(AtomicBool::new(true)),
+                    CancellationToken::new(),
                 )
                 .await;
             } else if ARGS.test_mail {
@@ -188,6 +190,7 @@ async fn main() -> Result<(), ProcessError> {
     for manager in &managers {
         manager.channel.lock().await.active = false;
         manager.stop_all(false).await;
+        manager.abort_supervisor().await;
     }
 
     pool.close().await;

@@ -12,15 +12,16 @@ use log::*;
 use tokio::task;
 
 use crate::{
-    api::state::AppState,
+    api::{
+        routes::{AuthUser, ensure_any_authority},
+        state::AppState,
+    },
     db::{
         handles,
         models::{Role, User},
     },
     utils::errors::ServiceError,
 };
-
-use super::{AuthUser, ensure_any_authority};
 
 /// From here on all request **must** contain the authorization header:\
 /// `"Authorization: Bearer <TOKEN>"`

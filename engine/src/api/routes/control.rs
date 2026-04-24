@@ -7,7 +7,10 @@ use axum::{
 use protect_axum::authorities::AuthDetails;
 
 use crate::{
-    api::state::AppState,
+    api::{
+        routes::{AuthUser, ensure_any_authority},
+        state::AppState,
+    },
     db::models::Role,
     player::utils::get_data_map,
     utils::{
@@ -16,8 +19,6 @@ use crate::{
         errors::ServiceError,
     },
 };
-
-use super::{AuthUser, ensure_any_authority};
 
 /// ### ffplayout controlling
 ///
@@ -213,10 +214,12 @@ pub async fn process_control(
         ProcessCtl::Stop => {
             manager.channel.lock().await.active = false;
             manager.stop_all(true).await;
+            manager.abort_supervisor().await;
         }
         ProcessCtl::Restart => {
             manager.channel.lock().await.active = false;
             manager.stop_all(false).await;
+            manager.abort_supervisor().await;
 
             tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 

@@ -10,17 +10,18 @@ use sqlx::{Pool, Sqlite};
 #[cfg(target_family = "unix")]
 use tokio::fs;
 
-use crate::ARGS;
-use crate::db::{
-    handles,
-    models::{Channel, User},
+use crate::{
+    ARGS,
+    db::{
+        handles,
+        models::{Channel, User},
+    },
+    utils::{
+        advanced_config::AdvancedConfig,
+        config::{OutputMode, PlayoutConfig},
+        errors::ProcessError,
+    },
 };
-use crate::utils::{
-    advanced_config::AdvancedConfig,
-    config::{OutputMode, PlayoutConfig},
-};
-
-use super::errors::ProcessError;
 
 #[derive(Parser, Debug, Default, Clone)]
 #[clap(version,
@@ -188,6 +189,9 @@ pub struct Args {
 
     #[clap(long, help_heading = Some("Playout"), help = "Skip validation process")]
     pub skip_validation: bool,
+
+    #[clap(long, hide = true, help = "Enable developer task lifecycle metrics")]
+    pub dev_metrics: bool,
 
     #[clap(long, hide = true, help = "Set fake time (for debugging)")]
     pub fake_time: Option<String>,

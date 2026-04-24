@@ -6,7 +6,7 @@ use protect_axum::authorities::AuthDetails;
 
 use crate::{
     api::{
-        routes::{DateObj, PathsObj},
+        routes::{AuthUser, DateObj, PathsObj, ensure_any_authority},
         state::AppState,
     },
     db::models::Role,
@@ -17,8 +17,6 @@ use crate::{
         playlist::{delete_playlist, generate_playlist, read_playlist, write_playlist},
     },
 };
-
-use super::{AuthUser, ensure_any_authority};
 
 /// #### ffplayout Playlist Operations
 ///

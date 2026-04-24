@@ -8,13 +8,13 @@ use protect_axum::authorities::AuthDetails;
 use real::RealIp;
 use serde::{Deserialize, Serialize};
 
-use super::{Endpoint, UuidData, check_uuid, prune_uuids};
 use crate::{
     api::{
         routes::{AuthUser, ensure_any_authority},
         state::AppState,
     },
     db::models::Role,
+    sse::{Endpoint, UuidData, check_uuid, prune_uuids},
     utils::errors::ServiceError,
 };
 

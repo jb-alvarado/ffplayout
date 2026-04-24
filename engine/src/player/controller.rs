@@ -12,14 +12,17 @@ use log::*;
 use m3u8_rs::Playlist;
 use serde::{Deserialize, Serialize};
 use sqlx::{Pool, Sqlite};
+use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, get_current_pid};
 use tokio::{
     fs,
     io::{self, AsyncReadExt},
     process::{Child, ChildStdout},
     sync::{Mutex, RwLock},
+    task::JoinHandle,
     time::{Duration, Instant, sleep},
 };
 use tokio_stream::StreamExt;
+use tokio_util::sync::CancellationToken;
 
 use crate::{
     ARGS,
@@ -78,6 +81,13 @@ pub struct ChannelManager {
     pub current_index: Arc<AtomicUsize>,
     pub filler_index: Arc<AtomicUsize>,
     pub storage: LocalStorage,
+    pub supervisor_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
+    pub validation_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
+    pub metrics_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
+    pub supervisor_token: Arc<Mutex<Option<CancellationToken>>>,
+    pub validation_token: Arc<Mutex<Option<CancellationToken>>>,
+    pub metrics_token: Arc<Mutex<Option<CancellationToken>>>,
+    pub task_generation: Arc<AtomicUsize>,
 }
 
 impl ChannelManager {
@@ -114,6 +124,13 @@ impl ChannelManager {
             filter_chain: None,
             current_date: Arc::new(Mutex::new(String::new())),
             storage,
+            supervisor_handle: Arc::new(Mutex::new(None)),
+            validation_handle: Arc::new(Mutex::new(None)),
+            metrics_handle: Arc::new(Mutex::new(None)),
+            supervisor_token: Arc::new(Mutex::new(None)),
+            validation_token: Arc::new(Mutex::new(None)),
+            metrics_token: Arc::new(Mutex::new(None)),
+            task_generation: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -155,17 +172,26 @@ impl ChannelManager {
             return Ok(()); // runs already, don't start multiple instances
         }
 
+        self.abort_supervisor().await;
+        self.spawn_dev_metrics_snapshot().await;
+
+        let generation = self.next_task_generation();
+        self.log_dev_task("supervisor", "start", generation).await;
+        let token = Self::replace_token(&self.supervisor_token).await;
         let self_clone = self.clone();
         let channel_id = self.id;
 
         handles::update_player(&self.db_pool, channel_id, true).await?;
 
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             const MAX_DELAY: Duration = Duration::from_secs(180);
             let mut elapsed = Duration::from_secs(5);
             let mut retry_delay = Duration::from_millis(500);
 
             loop {
+                if token.is_cancelled() {
+                    break;
+                }
                 let active = {
                     let channel = self_clone.channel.lock().await;
                     channel.active
@@ -220,12 +246,25 @@ impl ChannelManager {
                         error!(target: Target::all(), channel = channel_id; "{d_e}");
                     };
 
-                    sleep(retry_delay).await;
+                    tokio::select! {
+                        _ = token.cancelled() => break,
+                        _ = sleep(retry_delay) => {}
+                    }
                 }
             }
 
+            let event = if token.is_cancelled() {
+                "done_cancelled"
+            } else {
+                "done"
+            };
+            self_clone
+                .log_dev_task("supervisor", event, generation)
+                .await;
             trace!("Async start done");
         });
+
+        *self.supervisor_handle.lock().await = Some(handle);
 
         Ok(())
     }
@@ -238,6 +277,12 @@ impl ChannelManager {
         self.is_alive.store(true, Ordering::SeqCst);
         self.list_init.store(true, Ordering::SeqCst);
 
+        self.abort_supervisor().await;
+        self.spawn_dev_metrics_snapshot().await;
+
+        let generation = self.next_task_generation();
+        self.log_dev_task("supervisor", "start", generation).await;
+        let token = Self::replace_token(&self.supervisor_token).await;
         let self_clone = self.clone();
         let channel_id = self.id;
 
@@ -246,14 +291,188 @@ impl ChannelManager {
         if index + 1 == ARGS.channel.clone().unwrap_or_default().len() {
             run_channel(self_clone).await?;
         } else {
-            tokio::spawn(async move {
+            let handle = tokio::spawn(async move {
+                if token.is_cancelled() {
+                    return;
+                }
+
                 if let Err(e) = run_channel(self_clone).await {
                     error!(target: Target::all(), channel = channel_id; "Run channel <span class=\"log-number\">{channel_id}</span> failed: {e}");
                 };
             });
+
+            *self.supervisor_handle.lock().await = Some(handle);
         }
 
         Ok(())
+    }
+
+    fn next_task_generation(&self) -> usize {
+        self.task_generation.fetch_add(1, Ordering::SeqCst) + 1
+    }
+
+    async fn log_dev_task(&self, task: &str, event: &str, generation: usize) {
+        let enabled = self.config.read().await.general.dev_metrics;
+
+        if enabled {
+            debug!(target: Target::file(), channel = self.id; "<span class=\"log-gray\">[Dev Metrics]</span> task=<span class=\"log-addr\">{task}</span> event=<span class=\"log-addr\">{event}</span> generation=<span class=\"log-number\">{generation}</span>");
+        }
+    }
+
+    async fn replace_token(slot: &Arc<Mutex<Option<CancellationToken>>>) -> CancellationToken {
+        let token = CancellationToken::new();
+        let mut guard = slot.lock().await;
+
+        if let Some(old_token) = guard.replace(token.clone()) {
+            old_token.cancel();
+        }
+
+        token
+    }
+
+    async fn spawn_dev_metrics_snapshot(&self) {
+        self.stop_task("metrics", &self.metrics_handle, &self.metrics_token)
+            .await;
+
+        let enabled = self.config.read().await.general.dev_metrics;
+
+        if !enabled {
+            return;
+        }
+
+        let generation = self.next_task_generation();
+        self.log_dev_task("metrics", "start", generation).await;
+        let token = Self::replace_token(&self.metrics_token).await;
+        let manager = self.clone();
+        let pid = get_current_pid().ok();
+        let mut system = pid.map(|_| System::new());
+        let handle = tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = token.cancelled() => break,
+                    _ = sleep(Duration::from_secs(60)) => {
+                        let metrics = tokio::runtime::Handle::current().metrics();
+                        let thread_count = if let (Some(pid), Some(system)) = (pid, system.as_mut()) {
+                            tokio::task::block_in_place(|| {
+                                system.refresh_processes_specifics(
+                                    ProcessesToUpdate::Some(&[pid]),
+                                    false,
+                                    ProcessRefreshKind::nothing().with_tasks(),
+                                );
+                            });
+
+                            system
+                                .process(pid)
+                                .and_then(|process| process.tasks())
+                                .map_or(0, |tasks| tasks.len())
+                        } else {
+                            0
+                        };
+                        debug!(
+                            target: Target::file(),
+                            channel = manager.id;
+                            "<span class=\"log-gray\">[Dev Metrics]</span> task=<span class=\"log-addr\">runtime_snapshot</span> event=<span class=\"log-addr\">tick</span> generation=<span class=\"log-number\">{generation}</span> tokio_alive=<span class=\"log-number\">{}</span> tokio_workers=<span class=\"log-number\">{}</span> global_queue_depth=<span class=\"log-number\">{}</span> threads=<span class=\"log-number\">{thread_count}</span>",
+                            metrics.num_alive_tasks(),
+                            metrics.num_workers(),
+                            metrics.global_queue_depth(),
+                        );
+                    }
+                }
+            }
+
+            let event = if token.is_cancelled() {
+                "done_cancelled"
+            } else {
+                "done"
+            };
+            manager.log_dev_task("metrics", event, generation).await;
+        });
+
+        *self.metrics_handle.lock().await = Some(handle);
+    }
+
+    async fn stop_task(
+        &self,
+        task_name: &str,
+        handle: &Arc<Mutex<Option<JoinHandle<()>>>>,
+        token: &Arc<Mutex<Option<CancellationToken>>>,
+    ) {
+        let had_token = if let Some(token) = token.lock().await.take() {
+            token.cancel();
+            true
+        } else {
+            false
+        };
+
+        if had_token {
+            self.log_dev_task(task_name, "cancel_requested", 0).await;
+        }
+
+        if let Some(mut task) = handle.lock().await.take() {
+            tokio::select! {
+                _ = &mut task => {
+                    self.log_dev_task(task_name, "joined", 0).await;
+                }
+                _ = sleep(Duration::from_secs(2)) => {
+                    self.log_dev_task(task_name, "abort_fallback", 0).await;
+                    task.abort();
+                    let _ = task.await;
+                }
+            }
+        }
+    }
+
+    pub async fn abort_supervisor(&self) {
+        self.stop_task(
+            "supervisor",
+            &self.supervisor_handle,
+            &self.supervisor_token,
+        )
+        .await;
+    }
+
+    pub async fn stop_validation(&self) {
+        self.stop_task("validator", &self.validation_handle, &self.validation_token)
+            .await;
+    }
+
+    pub async fn stop_dev_metrics_snapshot(&self) {
+        self.stop_task("metrics", &self.metrics_handle, &self.metrics_token)
+            .await;
+    }
+
+    pub async fn spawn_validation(
+        &self,
+        config: PlayoutConfig,
+        current_list: Arc<Mutex<Vec<Media>>>,
+        playlist: crate::player::utils::JsonPlaylist,
+        is_alive: Arc<AtomicBool>,
+    ) {
+        self.stop_validation().await;
+
+        let generation = self.next_task_generation();
+        self.log_dev_task("validator", "start", generation).await;
+        let token = Self::replace_token(&self.validation_token).await;
+        let manager = self.clone();
+        let handle = tokio::spawn(async move {
+            crate::player::utils::json_validate::validate_playlist(
+                config,
+                current_list,
+                playlist,
+                is_alive,
+                token.clone(),
+            )
+            .await;
+
+            let event = if token.is_cancelled() {
+                "done_cancelled"
+            } else {
+                "done"
+            };
+            manager.log_dev_task("validator", event, generation).await;
+        });
+
+        *self.validation_handle.lock().await = Some(handle);
     }
 
     pub async fn stop(&self, unit: ProcessUnit) {
@@ -331,6 +550,8 @@ impl ChannelManager {
 
         self.is_alive.store(false, Ordering::SeqCst);
         self.ingest_is_alive.store(false, Ordering::SeqCst);
+        self.stop_validation().await;
+        self.stop_dev_metrics_snapshot().await;
 
         for unit in [Decoder, Encoder, Ingest] {
             self.stop(unit).await;

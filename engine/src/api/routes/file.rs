@@ -15,7 +15,7 @@ use tokio::fs;
 
 use crate::{
     api::{
-        routes::{FileObj, ImportObj},
+        routes::{AuthUser, FileObj, ImportObj, ensure_any_authority},
         state::AppState,
     },
     db::models::Role,
@@ -23,8 +23,6 @@ use crate::{
     player::utils::import::import_file,
     utils::errors::ServiceError,
 };
-
-use super::{AuthUser, ensure_any_authority};
 
 /// ### File Operations
 ///

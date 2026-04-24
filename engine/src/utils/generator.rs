@@ -14,17 +14,20 @@ use rand::{RngExt, rng, seq::SliceRandom};
 use tokio::fs;
 use tokio_stream::StreamExt;
 
-use crate::player::{
-    controller::ChannelManager,
-    input::folder::FolderSource,
-    utils::{
-        Media, get_date_range, include_file_extension, json_serializer::JsonPlaylist, sum_durations,
+use crate::{
+    player::{
+        controller::ChannelManager,
+        input::folder::FolderSource,
+        utils::{
+            Media, get_date_range, include_file_extension, json_serializer::JsonPlaylist,
+            sum_durations,
+        },
     },
-};
-use crate::utils::{
-    config::{PlayoutConfig, Template},
-    logging::Target,
-    time_to_sec,
+    utils::{
+        config::{PlayoutConfig, Template},
+        logging::Target,
+        time_to_sec,
+    },
 };
 
 pub fn random_list(clip_list: Vec<Media>, total_length: f64) -> Vec<Media> {

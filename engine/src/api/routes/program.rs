@@ -7,10 +7,9 @@ use log::*;
 use protect_axum::authorities::AuthDetails;
 use regex::Regex;
 
-use super::{AuthUser, ensure_any_authority};
 use crate::{
     api::{
-        routes::{ProgramItem, ProgramObj},
+        routes::{AuthUser, ProgramItem, ProgramObj, ensure_any_authority},
         state::AppState,
     },
     db::models::Role,

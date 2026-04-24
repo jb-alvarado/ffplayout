@@ -7,12 +7,13 @@ use protect_axum::authorities::AuthDetails;
 
 use crate::{
     AdvancedConfig,
-    api::state::AppState,
+    api::{
+        routes::{AuthUser, ensure_any_authority},
+        state::AppState,
+    },
     db::{handles, models::Role},
     utils::{config::get_config, errors::ServiceError},
 };
-
-use super::{AuthUser, ensure_any_authority};
 
 /// #### ffplayout Config
 ///

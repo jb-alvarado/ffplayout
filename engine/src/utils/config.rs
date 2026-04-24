@@ -14,15 +14,14 @@ use sqlx::{Pool, Sqlite};
 use tokio::{fs, io::AsyncReadExt};
 use ts_rs::TS;
 
-use crate::ARGS;
-use crate::AdvancedConfig;
-use crate::db::{handles, models};
-use crate::file::norm_abs_path;
-use crate::player::utils::validate_ffmpeg;
-use crate::utils::{gen_tcp_socket, time_to_sec};
-use crate::vec_strings;
-
-use super::errors::ServiceError;
+use crate::{
+    ARGS, AdvancedConfig,
+    db::{handles, models},
+    file::norm_abs_path,
+    player::utils::validate_ffmpeg,
+    utils::{errors::ServiceError, gen_tcp_socket, time_to_sec},
+    vec_strings,
+};
 
 pub const DUMMY_LEN: f64 = 60.0;
 pub const IMAGE_FORMAT: [&str; 21] = [
@@ -242,6 +241,8 @@ pub struct General {
     #[ts(skip)]
     #[serde(skip_serializing, skip_deserializing)]
     pub validate: bool,
+    #[ts(skip)]
+    pub dev_metrics: bool,
 }
 
 impl General {
@@ -257,6 +258,7 @@ impl General {
             template: None,
             skip_validation: false,
             validate: false,
+            dev_metrics: config.general_dev_metrics,
         }
     }
 }
@@ -931,6 +933,7 @@ pub async fn get_config(
     config.general.generate = args.generate;
     config.general.validate = args.validate;
     config.general.skip_validation = args.skip_validation;
+    config.general.dev_metrics = args.dev_metrics;
 
     if let Some(template_file) = args.template {
         let mut f = fs::File::options()

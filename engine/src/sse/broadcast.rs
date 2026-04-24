@@ -14,9 +14,11 @@ use tokio::{
 };
 use tokio_stream::wrappers::ReceiverStream;
 
-use crate::player::{controller::ChannelManager, utils::get_data_map};
-use crate::sse::Endpoint;
-use crate::utils::system::SystemStat;
+use crate::{
+    player::{controller::ChannelManager, utils::get_data_map},
+    sse::Endpoint,
+    utils::system::SystemStat,
+};
 
 #[derive(Debug, Clone)]
 struct Client {

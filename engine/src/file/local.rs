@@ -53,20 +53,6 @@ impl LocalStorage {
     }
 }
 
-impl Drop for LocalStorage {
-    fn drop(&mut self) {
-        let watch_handler = self.watch_handler.clone();
-
-        tokio::spawn(async move {
-            let mut watch_handler = watch_handler.lock().await;
-
-            if let Some(handler) = watch_handler.as_mut() {
-                handler.abort();
-            }
-        });
-    }
-}
-
 impl LocalStorage {
     pub async fn browser(&self, path_obj: &PathObject) -> Result<PathObject, ServiceError> {
         let (path, parent, path_component) =

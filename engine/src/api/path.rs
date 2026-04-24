@@ -3,8 +3,10 @@ use axum::{
     routing::{delete, get, post, put},
 };
 
-use super::{auth, routes::*};
-use crate::{api::state::AppState, sse};
+use crate::{
+    api::{auth, routes::*, state::AppState},
+    sse,
+};
 
 fn auth_routes() -> Router<AppState> {
     Router::new()
