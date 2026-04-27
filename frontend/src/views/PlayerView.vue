@@ -165,7 +165,7 @@ function setPreviewData(path: string) {
     } else {
         previewUrl.value = encodeURIComponent(`/file/${configStore.channels[configStore.i]?.id}${fullPath}`).replace(
             /%2F/g,
-            '/'
+            '/',
         )
     }
 
@@ -175,8 +175,8 @@ function setPreviewData(path: string) {
         mediaType(previewName.value) === 'audio'
             ? `audio/${ext}`
             : mediaType(previewName.value) === 'live'
-            ? 'application/x-mpegURL'
-            : `video/${ext}`
+              ? 'application/x-mpegURL'
+              : `video/${ext}`
 
     if (configStore.playout.storage.extensions.includes(`${ext}`)) {
         isVideo.value = true
@@ -341,7 +341,7 @@ async function importPlaylist(imp: boolean) {
                 method: 'PUT',
                 headers: authStore.authHeader,
                 body: formData,
-            }
+            },
         )
             .then(async (response) => {
                 if (response.status > 203) {
@@ -433,7 +433,6 @@ async function deletePlaylist(del: boolean) {
                 <VueDatePicker
                     v-if="!configStore.playout.playlist.infinit && configStore.playout.processing.mode !== 'folder'"
                     v-model="listDate"
-                    :clearable="false"
                     :hide-navigation="['time']"
                     :action-row="{ showCancel: false, showSelect: false, showPreview: false }"
                     :formats="{ day: 'dd', input: 'EEEE dd. LLL yyyy' }"
@@ -442,9 +441,9 @@ async function deletePlaylist(del: boolean) {
                     auto-apply
                     :locale="lang"
                     :dark="indexStore.darkMode"
-                    :ui="{ input: 'input input-sm !!w-[300px] text-right !pe-3' }"
+                    :ui="{ input: 'input input-sm text-right pe-3!' }"
                     required
-                    @update:model-value=";(beforeDayStart = false), (firstLoad = false)"
+                    @update:model-value=";((beforeDayStart = false), (firstLoad = false))"
                 />
             </div>
         </div>
@@ -500,21 +499,21 @@ async function deletePlaylist(del: boolean) {
             <button
                 class="btn btn-sm btn-primary join-item"
                 :title="t('player.generate')"
-                @click="mediaStore.getTree('', true), (showPlaylistGenerator = true)"
+                @click="(mediaStore.getTree('', true), (showPlaylistGenerator = true))"
             >
                 <i class="bi-sort-down-alt" />
             </button>
             <button
                 class="btn btn-sm btn-primary join-item"
                 :title="t('player.reset')"
-                @click=";(playlistStore.playlist.length = 0), playlistTable.getPlaylist()"
+                @click=";((playlistStore.playlist.length = 0), playlistTable.getPlaylist())"
             >
                 <i class="bi-arrow-counterclockwise" />
             </button>
             <button
                 class="btn btn-sm btn-primary join-item"
                 :title="t('player.save')"
-                @click=";(targetDate = listDate), savePlaylist(true)"
+                @click=";((targetDate = listDate), savePlaylist(true))"
             >
                 <i class="bi-download" />
             </button>

@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use chrono::NaiveDate;
 use log::*;
 use tokio::fs;
 
@@ -16,16 +17,20 @@ pub async fn read_playlist(
     config: &PlayoutConfig,
     date: String,
 ) -> Result<JsonPlaylist, ServiceError> {
-    let d: Vec<&str> = date.split('-').collect();
-    let mut playlist_path = config.channel.playlists.clone();
+    let parsed_date = NaiveDate::parse_from_str(&date, "%Y-%m-%d")?;
+    let year = parsed_date.format("%Y").to_string();
+    let month = parsed_date.format("%m").to_string();
+    let date = parsed_date.format("%Y-%m-%d").to_string();
 
-    playlist_path = playlist_path
-        .join(d[0])
-        .join(d[1])
-        .join(date.clone())
+    let playlist_path = config
+        .channel
+        .playlists
+        .join(year)
+        .join(month)
+        .join(date)
         .with_extension("json");
 
-    if !playlist_path.is_file() {
+    if !fs::try_exists(&playlist_path).await? {
         return Err(ServiceError::NoContent());
     }
 

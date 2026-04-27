@@ -93,6 +93,10 @@
     }
 }
 
+.dp--clear-btn {
+    display: none !important;
+}
+
 .alert-info {
     @apply text-info-content border-info;
     --alert-color: var(--color-info);
