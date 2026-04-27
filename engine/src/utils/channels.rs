@@ -15,6 +15,7 @@ use crate::{
         config::get_config,
         errors::ServiceError,
         mail::MailQueue,
+        system::SystemStat,
     },
 };
 
@@ -63,6 +64,7 @@ pub async fn create_channel(
     conn: &Pool<Sqlite>,
     controllers: Arc<RwLock<ChannelController>>,
     queue: Arc<Mutex<Vec<Arc<Mutex<MailQueue>>>>>,
+    system: SystemStat,
     target_channel: Channel,
 ) -> Result<Channel, ServiceError> {
     let channel = handles::insert_channel(conn, target_channel).await?;
@@ -154,7 +156,7 @@ pub async fn create_channel(
     let config = get_config(conn, channel.id).await?;
 
     let m_queue = Arc::new(Mutex::new(MailQueue::new(channel.id, config.mail.clone())));
-    let manager = ChannelManager::new(conn.clone(), channel.clone(), config).await;
+    let manager = ChannelManager::new(conn.clone(), channel.clone(), config, system).await;
 
     if let Err(e) = manager.storage.copy_assets().await {
         error!("{e}");

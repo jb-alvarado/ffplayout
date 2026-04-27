@@ -1,7 +1,5 @@
 use std::{
-    cmp,
-    collections::HashSet,
-    fmt,
+    cmp, fmt,
     path::Path,
     sync::{
         Arc,
@@ -14,7 +12,6 @@ use log::*;
 use m3u8_rs::Playlist;
 use serde::{Deserialize, Serialize};
 use sqlx::{Pool, Sqlite};
-use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, get_current_pid};
 use tokio::{
     fs,
     io::{self, AsyncReadExt},
@@ -35,7 +32,7 @@ use crate::{
         config::{OutputMode, PlayoutConfig},
         errors::ServiceError,
         logging::Target,
-        sizeof_fmt,
+        system::SystemStat,
     },
 };
 
@@ -91,10 +88,16 @@ pub struct ChannelManager {
     pub validation_token: Arc<Mutex<Option<CancellationToken>>>,
     pub metrics_token: Arc<Mutex<Option<CancellationToken>>>,
     pub task_generation: Arc<AtomicUsize>,
+    pub system: SystemStat,
 }
 
 impl ChannelManager {
-    pub async fn new(db_pool: Pool<Sqlite>, channel: Channel, config: PlayoutConfig) -> Self {
+    pub async fn new(
+        db_pool: Pool<Sqlite>,
+        channel: Channel,
+        config: PlayoutConfig,
+        system: SystemStat,
+    ) -> Self {
         let channel_extensions = channel.extra_extensions.clone();
         let mut extensions = config.storage.extensions.clone();
         let mut extra_extensions = channel_extensions
@@ -134,6 +137,7 @@ impl ChannelManager {
             validation_token: Arc::new(Mutex::new(None)),
             metrics_token: Arc::new(Mutex::new(None)),
             task_generation: Arc::new(AtomicUsize::new(0)),
+            system,
         }
     }
 
@@ -347,34 +351,14 @@ impl ChannelManager {
         self.log_dev_task("metrics", "start", generation).await;
         let token = Self::replace_token(&self.metrics_token).await;
         let manager = self.clone();
-        let pid = get_current_pid().ok();
-        let mut system = pid.map(|_| System::new());
+        let system = self.system.clone();
         let handle = tokio::spawn(async move {
             loop {
                 tokio::select! {
                     _ = token.cancelled() => break,
-                    _ = sleep(Duration::from_secs(60)) => {
+                    _ = sleep(Duration::from_secs(180)) => {
                         let metrics = tokio::runtime::Handle::current().metrics();
-                        let (thread_count, rss) = if let (Some(pid), Some(system)) = (pid, system.as_mut()) {
-                            tokio::task::block_in_place(|| {
-                                system.refresh_processes_specifics(
-                                    ProcessesToUpdate::Some(&[pid]),
-                                    false,
-                                    ProcessRefreshKind::nothing().with_tasks().with_memory(),
-                                );
-                            });
-
-                            if let Some(process) = system.process(pid) {
-                                let threads = process.tasks().map_or(0, HashSet::len);
-                                let rss = sizeof_fmt(process.memory() as f64);
-
-                                (threads, rss)
-                            } else {
-                                (0, String::from("0.0"))
-                            }
-                        } else {
-                            (0, String::from("0.0"))
-                        };
+                        let (thread_count, rss) = system.process_snapshot().await;
                         debug!(
                             target: Target::file(),
                             channel = manager.id;
@@ -551,14 +535,15 @@ impl ChannelManager {
             if let Err(e) = handles::update_player(&self.db_pool, channel_id, false).await {
                 error!(target: Target::all(), channel = channel_id; "Player status cannot be written: {e}");
             };
+
+            self.stop_validation().await;
+            self.stop_dev_metrics_snapshot().await;
         } else {
             debug!(target: Target::all(), channel = channel_id; "Stop all child processes from channel: <span class=\"log-number\">{channel_id}</span>");
         }
 
         self.is_alive.store(false, Ordering::SeqCst);
         self.ingest_is_alive.store(false, Ordering::SeqCst);
-        self.stop_validation().await;
-        self.stop_dev_metrics_snapshot().await;
 
         for unit in [Decoder, Encoder, Ingest] {
             self.stop(unit).await;

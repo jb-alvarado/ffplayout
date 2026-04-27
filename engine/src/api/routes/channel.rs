@@ -135,7 +135,15 @@ pub async fn add_channel(
 ) -> Result<Json<Channel>, ServiceError> {
     ensure_any_authority(&details, &[&Role::GlobalAdmin])?;
 
-    match create_channel(&state.pool, state.controller, state.mail_queues, data).await {
+    match create_channel(
+        &state.pool,
+        state.controller,
+        state.mail_queues,
+        state.system,
+        data,
+    )
+    .await
+    {
         Ok(c) => Ok(Json(c)),
         Err(e) => Err(e),
     }

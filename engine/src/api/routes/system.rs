@@ -41,7 +41,7 @@ pub async fn get_system_stat(
 
     let config = manager.config.read().await.clone();
 
-    let stat = state.broadcaster.system.stat(&config).await;
+    let stat = state.system.stat(&config).await;
 
     Ok(Json(stat))
 }

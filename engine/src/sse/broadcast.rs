@@ -54,10 +54,10 @@ struct BroadcasterInner {
 
 impl Broadcaster {
     /// Constructs new broadcaster and spawns ping loop.
-    pub fn create() -> Arc<Self> {
+    pub fn create(system: SystemStat) -> Arc<Self> {
         let this = Arc::new(Self {
             inner: Arc::new(Mutex::new(BroadcasterInner::default())),
-            system: SystemStat::new(),
+            system,
         });
 
         Self::spawn_ping(Arc::clone(&this));

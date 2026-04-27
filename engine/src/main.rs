@@ -31,6 +31,7 @@ use ffplayout::{
         logging::{init_logging, log_middleware},
         mail::{self, MailQueue},
         playlist::generate_playlist,
+        system::SystemStat,
         time_machine::set_mock_time,
     },
 };
@@ -38,8 +39,16 @@ use ffplayout::{
 #[cfg(not(debug_assertions))]
 use ffplayout::serve::routes::admin_ui_routes;
 
-#[tokio::main]
-async fn main() -> Result<(), ProcessError> {
+fn main() -> Result<(), ProcessError> {
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(8)
+        .max_blocking_threads(6)
+        .enable_all()
+        .build()?
+        .block_on(async_main())
+}
+
+async fn async_main() -> Result<(), ProcessError> {
     let pool = db_pool().await?;
 
     let mut init = init_args(&pool).await?;
@@ -50,13 +59,15 @@ async fn main() -> Result<(), ProcessError> {
 
     set_mock_time(&ARGS.fake_time)?;
     init_globales(&pool).await?;
+    let system = SystemStat::new();
 
     let app_state = AppState {
         auth_state: Arc::new(SseAuthState::default()),
-        broadcaster: Broadcaster::create(),
+        broadcaster: Broadcaster::create(system.clone()),
         controller: Arc::new(RwLock::new(ChannelController::new())),
         mail_queues: Arc::new(Mutex::new(vec![])),
         pool: pool.clone(),
+        system: system.clone(),
     };
 
     // Logger handle should be kept alive until the end.
@@ -69,7 +80,7 @@ async fn main() -> Result<(), ProcessError> {
             let config = get_config(&pool, channel.id).await?;
             let m_queue = Arc::new(Mutex::new(MailQueue::new(channel.id, config.mail.clone())));
             let channel_active = channel.active;
-            let manager = ChannelManager::new(pool.clone(), channel, config).await;
+            let manager = ChannelManager::new(pool.clone(), channel, config, system.clone()).await;
 
             if init {
                 if let Err(e) = manager.storage.copy_assets().await {
@@ -123,7 +134,8 @@ async fn main() -> Result<(), ProcessError> {
         for (index, channel_id) in channel_ids.iter().enumerate() {
             let config = get_config(&pool, *channel_id).await?;
             let channel = handles::select_channel(&pool, channel_id).await?;
-            let manager = ChannelManager::new(pool.clone(), channel, config.clone()).await;
+            let manager =
+                ChannelManager::new(pool.clone(), channel, config.clone(), system.clone()).await;
 
             if ARGS.foreground {
                 let m_queue = Arc::new(Mutex::new(MailQueue::new(*channel_id, config.mail)));
