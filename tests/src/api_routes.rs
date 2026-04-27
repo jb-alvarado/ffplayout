@@ -16,7 +16,7 @@ use ffplayout::{
     db::{handles, init_globales, models::User},
     player::controller::{ChannelController, ChannelManager},
     sse::{SseAuthState, broadcast::Broadcaster},
-    utils::config::PlayoutConfig,
+    utils::{config::PlayoutConfig, system::SystemStat},
 };
 
 async fn prepare_config() -> (PlayoutConfig, ChannelManager, Pool<Sqlite>) {
@@ -50,7 +50,8 @@ async fn prepare_config() -> (PlayoutConfig, ChannelManager, Pool<Sqlite>) {
 
     let config = PlayoutConfig::new(&pool, 1, None).await.unwrap();
     let channel = handles::select_channel(&pool, &1).await.unwrap();
-    let manager = ChannelManager::new(pool.clone(), channel, config.clone()).await;
+    let manager =
+        ChannelManager::new(pool.clone(), channel, config.clone(), SystemStat::new()).await;
 
     (config, manager, pool)
 }
@@ -73,13 +74,14 @@ async fn test_get() {
 
 #[tokio::test]
 async fn test_login() {
-    let (_, _, pool) = prepare_config().await;
+    let (_, manager, pool) = prepare_config().await;
     let app_state = AppState {
         auth_state: Arc::new(SseAuthState::default()),
-        broadcaster: Broadcaster::create(),
+        broadcaster: Broadcaster::create(manager.system.clone()),
         controller: Arc::new(RwLock::new(ChannelController::new())),
         mail_queues: Arc::new(Mutex::new(vec![])),
         pool: pool.clone(),
+        system: manager.system.clone(),
     };
 
     init_globales(&pool).await.unwrap();
