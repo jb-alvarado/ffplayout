@@ -591,12 +591,10 @@ impl CurrentProgram {
                 );
             }
 
+            self.manager.list_init.store(true, Ordering::SeqCst);
+
             let filler = {
                 let fillers = self.manager.filler_list.lock().await;
-
-                if self.manager.current_list.lock().await.len() - 1 < last_index {
-                    self.manager.list_init.store(true, Ordering::SeqCst);
-                }
 
                 if self.config.storage.filler_path.is_dir() && !fillers.is_empty() {
                     let index = self

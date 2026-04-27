@@ -1,7 +1,7 @@
 use std::{
     collections::HashSet,
     fmt,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, PoisonError},
 };
 
 use local_ip_address::list_afinet_netifas;
@@ -106,7 +106,7 @@ impl SystemStat {
         let info_sys = Arc::clone(&self.info_sys);
 
         tokio::task::spawn_blocking(move || {
-            let mut sys = info_sys.lock().unwrap_or_else(|e| e.into_inner());
+            let mut sys = info_sys.lock().unwrap_or_else(PoisonError::into_inner);
 
             sys.refresh_processes_specifics(
                 ProcessesToUpdate::Some(&[pid]),
@@ -136,9 +136,9 @@ impl SystemStat {
 
         let Ok((cpu, load, memory, network, storage, swap)) =
             tokio::task::spawn_blocking(move || {
-                let mut disks = info_disks.lock().unwrap_or_else(|e| e.into_inner());
-                let mut networks = info_net.lock().unwrap_or_else(|e| e.into_inner());
-                let mut sys = info_sys.lock().unwrap_or_else(|e| e.into_inner());
+                let mut disks = info_disks.lock().unwrap_or_else(PoisonError::into_inner);
+                let mut networks = info_net.lock().unwrap_or_else(PoisonError::into_inner);
+                let mut sys = info_sys.lock().unwrap_or_else(PoisonError::into_inner);
 
                 disks.refresh(true);
                 networks.refresh(true);
