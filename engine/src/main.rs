@@ -1,6 +1,6 @@
-use std::sync::{
+use std::{
     env,
-    {Arc, atomic::AtomicBool, sync::LazyLock},
+    sync::{Arc, LazyLock, atomic::AtomicBool},
 };
 
 use axum::{Router, middleware};
