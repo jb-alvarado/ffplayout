@@ -39,10 +39,24 @@ use ffplayout::{
 #[cfg(not(debug_assertions))]
 use ffplayout::serve::routes::admin_ui_routes;
 
+fn env_parse_or<T>(key: &str, default: T) -> T
+where
+    T: std::str::FromStr,
+{
+    env::var(key)
+        .ok()
+        .and_then(|v| v.parse::<T>().ok())
+        .unwrap_or(default)
+}
+
+pub static WORKER_THREADS: LazyLock<usize> = LazyLock::new(|| env_parse_or("WORKER_THREADS", 8));
+pub static MAX_BLOCKING_THREADS: LazyLock<usize> =
+    LazyLock::new(|| env_parse_or("MAX_BLOCKING_THREADS", 6));
+
 fn main() -> Result<(), ProcessError> {
     tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(8)
-        .max_blocking_threads(6)
+        .worker_threads(WORKER_THREADS)
+        .max_blocking_threads(MAX_BLOCKING_THREADS)
         .enable_all()
         .build()?
         .block_on(async_main())
