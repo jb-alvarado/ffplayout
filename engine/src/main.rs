@@ -58,8 +58,8 @@ pub static MAX_BLOCKING_THREADS: LazyLock<usize> =
 
 fn main() -> Result<(), ProcessError> {
     tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(WORKER_THREADS)
-        .max_blocking_threads(MAX_BLOCKING_THREADS)
+        .worker_threads(*WORKER_THREADS)
+        .max_blocking_threads(*MAX_BLOCKING_THREADS)
         .enable_all()
         .build()?
         .block_on(async_main())
