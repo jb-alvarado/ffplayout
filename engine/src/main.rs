@@ -1,4 +1,7 @@
-use std::sync::{Arc, atomic::AtomicBool};
+use std::sync::{
+    env,
+    {Arc, atomic::AtomicBool, sync::LazyLock},
+};
 
 use axum::{Router, middleware};
 use lazy_limit::{Duration as LDuration, RuleConfig, init_rate_limiter};
