@@ -359,6 +359,17 @@ impl ChannelManager {
                     _ = sleep(Duration::from_secs(180)) => {
                         let metrics = tokio::runtime::Handle::current().metrics();
                         let (thread_count, rss) = system.process_snapshot().await;
+                        #[cfg(tokio_unstable)]
+                        debug!(
+                            target: Target::file(),
+                            channel = manager.id;
+                            "<span class=\"log-gray\">[Dev Metrics]</span> task=<span class=\"log-addr\">runtime_snapshot</span> event=<span class=\"log-addr\">tick</span> generation=<span class=\"log-number\">{generation}</span> tokio_alive=<span class=\"log-number\">{}</span> tokio_workers=<span class=\"log-number\">{}</span> global_queue_depth=<span class=\"log-number\">{}</span> blocking_queue_depth=<span class=\"log-number\">{}</span> threads=<span class=\"log-number\">{thread_count}</span> rss=<span class=\"log-number\">{rss}</span>",
+                            metrics.num_alive_tasks(),
+                            metrics.num_workers(),
+                            metrics.global_queue_depth(),
+                            metrics.blocking_queue_depth(),
+                        );
+                        #[cfg(not(tokio_unstable))]
                         debug!(
                             target: Target::file(),
                             channel = manager.id;

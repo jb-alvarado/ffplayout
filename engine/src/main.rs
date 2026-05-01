@@ -52,13 +52,11 @@ where
         .unwrap_or(default)
 }
 
-pub static WORKER_THREADS: LazyLock<usize> = LazyLock::new(|| env_parse_or("WORKER_THREADS", 8));
 pub static MAX_BLOCKING_THREADS: LazyLock<usize> =
-    LazyLock::new(|| env_parse_or("MAX_BLOCKING_THREADS", 6));
+    LazyLock::new(|| env_parse_or("MAX_BLOCKING_THREADS", 24));
 
 fn main() -> Result<(), ProcessError> {
     tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(*WORKER_THREADS)
         .max_blocking_threads(*MAX_BLOCKING_THREADS)
         .enable_all()
         .build()?
