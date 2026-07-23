@@ -1129,6 +1129,15 @@ pub(super) fn pump_desktop_window_events() {
     });
 }
 
+/// Releases Winit/WGPU resources while their supporting thread-local state is
+/// still alive. Leaving this to TLS destruction can make WGPU access a TLS
+/// value that Rust has already torn down during process exit.
+pub(super) fn release_desktop_window() {
+    let _ = DESKTOP_WINDOW.try_with(|window| {
+        drop(window.borrow_mut().take());
+    });
+}
+
 fn hide_desktop_window() {
     let hide = || {
         DESKTOP_WINDOW.with(|window| {

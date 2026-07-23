@@ -77,6 +77,12 @@ const router = createRouter({
                     meta: { showHeader: true, roles: ['global_admin', 'channel_admin'] },
                 },
                 {
+                    path: 'audio',
+                    name: 'configure-audio',
+                    component: () => import('@/components/config/ConfigAudio.vue'),
+                    meta: { showHeader: true, roles: ['global_admin', 'channel_admin'] },
+                },
+                {
                     path: 'user',
                     name: 'configure-user',
                     component: () => import('@/components/config/ConfigUser.vue'),

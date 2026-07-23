@@ -16,6 +16,7 @@ useHead({
 
 const isChannelRoute = computed(() => route.name === 'configure-channel')
 const isPlayoutRoute = computed(() => route.name === 'configure-playout')
+const isAudioRoute = computed(() => route.name === 'configure-audio')
 const isUserRoute = computed(() => route.name === 'configure-user')
 const isGlobalRoute = computed(() => route.name === 'configure-global')
 const channelQuery = computed(() => ({ channel: route.query.channel }))
@@ -37,6 +38,14 @@ const channelQuery = computed(() => ({ channel: route.query.channel }))
                 :class="isPlayoutRoute && 'bg-base-100/40'"
             >
                 Playout
+            </RouterLink>
+            <RouterLink
+                v-if="authStore.role !== 'user'"
+                :to="{ name: 'configure-audio', query: channelQuery }"
+                class="join-item btn btn-sm btn-primary mt-1 duration-500"
+                :class="isAudioRoute && 'bg-base-100/40'"
+            >
+                Audio
             </RouterLink>
             <RouterLink
                 :to="{ name: 'configure-user', query: channelQuery }"

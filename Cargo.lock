@@ -1311,6 +1311,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
+name = "ebur128-stream"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "66e026ac32fee8397cdbaafee0030443af608d6c4832e590905b16c9450b7536"
+dependencies = [
+ "bitflags 2.13.1",
+ "libm",
+]
+
+[[package]]
 name = "ecdsa"
 version = "0.16.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1520,6 +1530,7 @@ dependencies = [
  "clap",
  "cosmic-text",
  "cpal",
+ "ebur128-stream",
  "env_logger",
  "ffmpeg-next",
  "glob",

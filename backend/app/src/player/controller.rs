@@ -7,7 +7,9 @@ use std::{
     },
 };
 
-use ff_engine::{AudioEffectsControl, AudioLevel, PlaybackControl, TextOverlayState};
+use ff_engine::{
+    AudioEffectsControl, AudioLevel, LiveLoudnessConfig, PlaybackControl, TextOverlayState,
+};
 use log::*;
 use serde::{Deserialize, Serialize};
 use sqlx::{Pool, Sqlite};
@@ -29,6 +31,19 @@ use crate::{
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const SUPERVISOR_STOP_TIMEOUT: Duration = Duration::from_secs(15);
+
+pub fn live_loudness_config(processing: &crate::utils::config::Audio) -> LiveLoudnessConfig {
+    LiveLoudnessConfig {
+        target_lufs: processing.live_loudness_target_lufs,
+        dead_band_lu: processing.live_loudness_dead_band_lu,
+        max_gain_db: processing.live_loudness_max_gain_db,
+        max_attenuation_db: processing.live_loudness_max_attenuation_db,
+        gain_up_db_per_second: processing.live_loudness_gain_up_db_per_second,
+        gain_down_db_per_second: processing.live_loudness_gain_down_db_per_second,
+        silence_gate_lufs: processing.live_loudness_silence_gate_lufs,
+        true_peak_ceiling_dbtp: processing.live_loudness_true_peak_ceiling_dbtp,
+    }
+}
 
 /// Defined process units.
 #[derive(Clone, Debug, Default, Copy, Eq, Serialize, Deserialize, PartialEq)]
@@ -83,6 +98,7 @@ pub struct ChannelManager {
     pub task_runner_token: Arc<Mutex<Option<CancellationToken>>>,
     pub task_generation: Arc<AtomicUsize>,
     pub audio_effects: AudioEffectsControl,
+    pub live_loudness: ff_engine::LiveLoudnessControl,
     pub audio_level: Arc<StdMutex<Option<AudioLevel>>>,
     pub text_overlay: TextOverlayState,
     pub playback_control: Arc<Mutex<PlaybackControl>>,
@@ -108,7 +124,11 @@ impl ChannelManager {
         extensions.append(&mut extra_extensions);
 
         let storage = init_storage(config.channel.storage.clone(), extensions).await?;
-        let audio_effects = AudioEffectsControl::new(config.processing.volume).unwrap_or_default();
+        let audio_effects = AudioEffectsControl::new(config.audio.volume).unwrap_or_default();
+        let live_loudness = ff_engine::LiveLoudnessControl::new(
+            config.audio.live_loudness_enable,
+            live_loudness_config(&config.audio),
+        );
         let text_overlay = TextOverlayState::default();
 
         Ok(Self {
@@ -142,6 +162,7 @@ impl ChannelManager {
             task_runner_token: Arc::new(Mutex::new(None)),
             task_generation: Arc::new(AtomicUsize::new(0)),
             audio_effects,
+            live_loudness,
             audio_level: Arc::new(StdMutex::new(None)),
             text_overlay,
             playback_control: Arc::new(Mutex::new(PlaybackControl::default())),

@@ -27,11 +27,13 @@ export type Playlist = { day_start: string, length: string, infinit: boolean, };
  *
  * This we init ones, when ffplayout is starting and use them globally in the hole program.
  */
-export type PlayoutConfig = { general: General, mail: Mail, logging: Logging, processing: Processing, ingest: Ingest, playlist: Playlist, storage: Storage, text: Text, task: Task, output: Output, };
+export type PlayoutConfig = { general: General, mail: Mail, logging: Logging, processing: Processing, audio: Audio, ingest: Ingest, playlist: Playlist, storage: Storage, text: Text, task: Task, output: Output, };
 
 export type ProcessMode = "folder" | "playlist";
 
-export type Processing = { mode: ProcessMode, add_logo: boolean, logo: string, logo_scale: string, logo_opacity: number, logo_position: string, volume: number, vtt_enable: boolean, vtt_dummy: string | null, vtt_name: string, vtt_language: string, vtt_default: boolean, };
+export type Processing = { mode: ProcessMode, add_logo: boolean, logo: string, logo_scale: string, logo_opacity: number, logo_position: string, vtt_enable: boolean, vtt_dummy: string | null, vtt_name: string, vtt_language: string, vtt_default: boolean, };
+
+export type Audio = { volume: number, live_loudness_enable: boolean, live_loudness_target_lufs: number, live_loudness_dead_band_lu: number, live_loudness_max_gain_db: number, live_loudness_max_attenuation_db: number, live_loudness_gain_up_db_per_second: number, live_loudness_gain_down_db_per_second: number, live_loudness_silence_gate_lufs: number, live_loudness_true_peak_ceiling_dbtp: number, };
 
 export type Storage = { filler: string, extensions: Array<string>, shuffle: boolean, shared_storage: boolean, };
 

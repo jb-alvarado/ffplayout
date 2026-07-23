@@ -23,6 +23,7 @@ use log::{error, info, warn};
 
 use crate::{
     PlaybackControl,
+    audio_mixer::{LiveLoudnessControl, LiveLoudnessMetrics, LiveLoudnessProcessor},
     benchmark::{self, BenchHandle, Stage},
     compositor::logo::LogoOverlay,
     output::FrameOutput,
@@ -53,6 +54,7 @@ pub struct LiveReceiver {
     abort: Arc<AtomicBool>,
     fps: u32,
     sample_rate: u32,
+    loudness_control: LiveLoudnessControl,
     active: bool,
     connecting: bool,
     connecting_since: Option<Instant>,
@@ -70,6 +72,7 @@ pub struct LiveReceiver {
     video_pts: i64,
     audio_pts: i64,
     source_has_audio: bool,
+    loudness: Option<LiveLoudnessProcessor>,
     benchmark: Arc<Mutex<Option<BenchHandle>>>,
 }
 
@@ -94,6 +97,7 @@ enum LiveEvent {
 pub fn spawn_rtmp_listener(url: String, cfg: OutputConfig) -> LiveReceiver {
     let fps = cfg.fps;
     let sample_rate = cfg.sample_rate;
+    let loudness_control = cfg.live_loudness_control.clone();
     let capacity = live_channel_capacity(cfg.fps);
     let (tx, rx) = mpsc::sync_channel(capacity);
     let abort = Arc::new(AtomicBool::new(false));
@@ -109,6 +113,7 @@ pub fn spawn_rtmp_listener(url: String, cfg: OutputConfig) -> LiveReceiver {
         abort,
         fps,
         sample_rate,
+        loudness_control,
         active: false,
         connecting: false,
         connecting_since: None,
@@ -126,6 +131,7 @@ pub fn spawn_rtmp_listener(url: String, cfg: OutputConfig) -> LiveReceiver {
         video_pts: 0,
         audio_pts: 0,
         source_has_audio: false,
+        loudness: None,
         benchmark,
     }
 }
@@ -142,6 +148,10 @@ impl LiveReceiver {
             .benchmark
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = benchmark;
+    }
+
+    pub fn loudness_metrics(&self) -> Option<LiveLoudnessMetrics> {
+        self.loudness.as_ref().map(LiveLoudnessProcessor::metrics)
     }
 }
 
@@ -172,6 +182,7 @@ impl<'a, O: FrameOutput> LiveOverrideOutput<'a, O> {
                     self.live.connecting = true;
                     self.live.connecting_since = Some(Instant::now());
                     self.live.source_has_audio = has_audio;
+                    self.live.loudness = None;
                     info!("live input connected; waiting for first video frame");
                 }
                 Ok(LiveEvent::Video(session_id, frame)) => {
@@ -488,6 +499,10 @@ impl<'a, O: FrameOutput> LiveOverrideOutput<'a, O> {
         let pts = pts.max(self.live.audio_pts);
         self.fill_audio_until(pts)?;
         frame.set_pts(Some(pts));
+        self.sync_loudness_processor();
+        if let Some(loudness) = &mut self.live.loudness {
+            loudness.process(&mut frame);
+        }
         self.output.encode_audio(&frame)?;
         self.remember_audio_frame_end(pts + samples);
         Ok(())
@@ -499,6 +514,27 @@ impl<'a, O: FrameOutput> LiveOverrideOutput<'a, O> {
             self.encode_live_audio_frame(frame)?;
         }
         Ok(())
+    }
+
+    fn sync_loudness_processor(&mut self) {
+        let settings = self.live.loudness_control.settings();
+        if !settings.enabled {
+            self.live.loudness = None;
+            return;
+        }
+        let recreate = self
+            .live
+            .loudness
+            .as_ref()
+            .is_none_or(|processor| processor.config() != settings.config);
+        if recreate {
+            self.live.loudness = LiveLoudnessProcessor::new(self.live.sample_rate, settings.config)
+                .map_err(|error| {
+                    warn!("live loudness normalization disabled: {error}");
+                    error
+                })
+                .ok();
+        }
     }
 
     fn align_live_pts_to_common_time(&mut self) {
@@ -1065,7 +1101,10 @@ mod tests {
         LiveEvent, LiveFrameSender, LiveOverrideOutput, LiveReceiver, live_channel_capacity,
         resume_pts,
     };
-    use crate::output::FrameOutput;
+    use crate::{
+        audio_mixer::{LiveLoudnessConfig, LiveLoudnessControl, LiveLoudnessProcessor},
+        output::FrameOutput,
+    };
 
     #[derive(Default)]
     struct CountingOutput {
@@ -1102,6 +1141,7 @@ mod tests {
             abort: Arc::new(AtomicBool::new(false)),
             fps: 25,
             sample_rate: 48_000,
+            loudness_control: LiveLoudnessControl::new(false, LiveLoudnessConfig::default()),
             active: false,
             connecting: false,
             connecting_since: None,
@@ -1119,6 +1159,7 @@ mod tests {
             video_pts: 0,
             audio_pts: 0,
             source_has_audio: false,
+            loudness: LiveLoudnessProcessor::new(48_000, LiveLoudnessConfig::default()).ok(),
             benchmark: Arc::new(Mutex::new(None)),
         }
     }

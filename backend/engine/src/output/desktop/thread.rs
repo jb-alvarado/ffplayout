@@ -41,15 +41,18 @@ pub fn run_on_main_thread<R: Send + 'static>(background: impl FnOnce() -> R + Se
             Ok(job) => job(),
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => {
-                return done_rx
+                let result = done_rx
                     .recv()
                     .expect("ffplayout runtime stopped without a result");
+                super::release_desktop_window();
+                return result;
             }
         }
 
         super::pump_desktop_window_events();
 
         if let Ok(result) = done_rx.try_recv() {
+            super::release_desktop_window();
             return result;
         }
     }

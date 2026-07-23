@@ -247,7 +247,7 @@ function volumeIcon() {
 const applyVolumeControl = throttle(async () => {
     const volume = Math.min(1.5, Math.max(0, Number(volumeLevel.value) || 0))
     volumeLevel.value = volume
-    configStore.playout.processing.volume = volume
+    configStore.playout.audio.volume = volume
 
     try {
         const response = await configStore.applyAudioEffects(volume)
@@ -261,13 +261,13 @@ const applyVolumeControl = throttle(async () => {
 }, 250)
 
 function muteAudio() {
-    if (configStore.playout.processing.volume === 0) {
+    if (configStore.playout.audio.volume === 0) {
         volumeLevel.value = 1
     } else {
         volumeLevel.value = 0
     }
 
-    configStore.playout.processing.volume = volumeLevel.value
+    configStore.playout.audio.volume = volumeLevel.value
     configStore.applyAudioEffects(volumeLevel.value)
 }
 

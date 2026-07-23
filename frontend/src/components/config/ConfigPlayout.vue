@@ -432,20 +432,6 @@ async function onSubmitPlayout() {
                     />
                     <p class="fieldset-label items-baseline">{{ t('config.processingLogoPosition') }}</p>
                 </fieldset>
-                <fieldset class="fieldset">
-                    <legend class="fieldset-legend">Volumen</legend>
-                    <div class="flex items-center gap-2">
-                        <input
-                            v-model.number="configStore.playout.processing.volume"
-                            type="number"
-                            min="0"
-                            max="1.5"
-                            step="0.001"
-                            class="input input-sm w-36"
-                        />
-                    </div>
-                </fieldset>
-
                 <fieldset class="fieldset mt-2 rounded-box w-full">
                     <label class="fieldset-label text-base-content">
                         <input v-model="configStore.playout.processing.vtt_enable" type="checkbox" class="checkbox" />

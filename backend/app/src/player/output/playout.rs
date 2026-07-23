@@ -40,7 +40,7 @@ pub async fn player(manager: ChannelManager) -> Result<(), ServiceError> {
 
     manager
         .audio_effects
-        .set_volume(config.processing.volume)
+        .set_volume(config.audio.volume)
         .map_err(engine_error)?;
     if let Ok(mut audio_level) = manager.audio_level.lock() {
         *audio_level = None;
@@ -48,6 +48,7 @@ pub async fn player(manager: ChannelManager) -> Result<(), ServiceError> {
     let output_config = engine_output_config(
         &config,
         manager.audio_effects.clone(),
+        manager.live_loudness.clone(),
         manager.audio_level.clone(),
         manager.text_overlay.clone(),
         desktop_control_callback(manager.clone()),
@@ -395,6 +396,7 @@ async fn open_desktop_playout(
 fn engine_output_config(
     config: &PlayoutConfig,
     audio_effects: ff_engine::AudioEffectsControl,
+    live_loudness: ff_engine::LiveLoudnessControl,
     audio_level: std::sync::Arc<std::sync::Mutex<Option<ff_engine::AudioLevel>>>,
     text_overlay_state: TextOverlayState,
     desktop_control_callback: ff_engine::DesktopControlCallback,
@@ -440,6 +442,7 @@ fn engine_output_config(
 
     Ok(OutputConfig::new(width, height, fps, 48_000)
         .with_audio_effects(audio_effects)
+        .with_live_loudness_control(live_loudness)
         .with_audio_level_callback(Some(AudioLevelCallback::new(move |level| {
             if let Ok(mut audio_level) = audio_level.lock() {
                 *audio_level = Some(level);
@@ -492,10 +495,10 @@ fn desktop_control_callback(manager: ChannelManager) -> ff_engine::DesktopContro
 fn validate_supported_config(config: &PlayoutConfig) -> Result<(), ServiceError> {
     config.output.validate().map_err(ServiceError::Conflict)?;
 
-    let processing = &config.processing;
-    if !processing.volume.is_finite() || !(0.0..=1.5).contains(&processing.volume) {
+    let audio = &config.audio;
+    if !audio.volume.is_finite() || !(0.0..=1.5).contains(&audio.volume) {
         return Err(ServiceError::Conflict(
-            "processing volume must be between 0.0 and 1.5".to_string(),
+            "audio volume must be between 0.0 and 1.5".to_string(),
         ));
     }
     Ok(())

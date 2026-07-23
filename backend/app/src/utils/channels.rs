@@ -142,6 +142,10 @@ async fn create_channel_records(
     }
 
     handles::insert_configuration(&mut *transaction, channel.id, output_id, &ingest_url).await?;
+    sqlx::query("INSERT INTO audio_config (channel_id) VALUES($1)")
+        .bind(channel.id)
+        .execute(&mut *transaction)
+        .await?;
     sqlx::query(
         "INSERT OR IGNORE INTO user_channels (channel_id, user_id)
          SELECT $1, id FROM user WHERE role_id = 1",

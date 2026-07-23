@@ -15,7 +15,7 @@ pub async fn select_configuration(
     pool: &SqlitePool,
     channel: i32,
 ) -> Result<Configuration, ProcessError> {
-    const QUERY: &str = "SELECT * FROM configurations WHERE channel_id = $1";
+    const QUERY: &str = "SELECT configurations.*, audio_config.volume AS processing_volume, audio_config.live_loudness_enable AS processing_live_loudness_enable, audio_config.live_loudness_target_lufs AS processing_live_loudness_target_lufs, audio_config.live_loudness_dead_band_lu AS processing_live_loudness_dead_band_lu, audio_config.live_loudness_max_gain_db AS processing_live_loudness_max_gain_db, audio_config.live_loudness_max_attenuation_db AS processing_live_loudness_max_attenuation_db, audio_config.live_loudness_gain_up_db_per_second AS processing_live_loudness_gain_up_db_per_second, audio_config.live_loudness_gain_down_db_per_second AS processing_live_loudness_gain_down_db_per_second, audio_config.live_loudness_silence_gate_lufs AS processing_live_loudness_silence_gate_lufs, audio_config.live_loudness_true_peak_ceiling_dbtp AS processing_live_loudness_true_peak_ceiling_dbtp FROM configurations JOIN audio_config USING(channel_id) WHERE configurations.channel_id = $1";
 
     let result = sqlx::query_as(QUERY).bind(channel).fetch_one(pool).await?;
 
@@ -68,7 +68,7 @@ pub async fn update_configuration(
     id: i32,
     config: PlayoutConfig,
 ) -> Result<SqliteQueryResult, ProcessError> {
-    const QUERY: &str = "UPDATE configurations SET general_stop_threshold = $2, mail_subject = $3, mail_recipient = $4, mail_level = $5, mail_interval = $6, logging_ffmpeg_level = $7, logging_ingest_level = $8, logging_detect_silence = $9, logging_ignore = $10, processing_mode = $11, processing_add_logo = $12, processing_logo = $13, processing_logo_scale = $14, processing_logo_opacity = $15, processing_logo_position = $16, processing_volume = $17, processing_vtt_enable = $18, processing_vtt_dummy = $19, processing_vtt_name = $20, processing_vtt_language = $21, processing_vtt_default = $22, ingest_enable = $23, ingest_url = $24, playlist_day_start = $25, playlist_length = $26, playlist_infinit = $27, storage_filler = $28, storage_extensions = $29, storage_shuffle = $30, text_preset_id = $31, task_enable = $32, task_path = $33, output_id = $34 WHERE id = $1";
+    const QUERY: &str = "UPDATE configurations SET general_stop_threshold = $2, mail_subject = $3, mail_recipient = $4, mail_level = $5, mail_interval = $6, logging_ffmpeg_level = $7, logging_ingest_level = $8, logging_detect_silence = $9, logging_ignore = $10, processing_mode = $11, processing_add_logo = $12, processing_logo = $13, processing_logo_scale = $14, processing_logo_opacity = $15, processing_logo_position = $16, processing_vtt_enable = $17, processing_vtt_dummy = $18, processing_vtt_name = $19, processing_vtt_language = $20, processing_vtt_default = $21, ingest_enable = $22, ingest_url = $23, playlist_day_start = $24, playlist_length = $25, playlist_infinit = $26, storage_filler = $27, storage_extensions = $28, storage_shuffle = $29, text_preset_id = $30, task_enable = $31, task_path = $32, output_id = $33 WHERE id = $1";
 
     let result = sqlx::query(QUERY)
         .bind(id)
@@ -87,7 +87,6 @@ pub async fn update_configuration(
         .bind(config.processing.logo_scale)
         .bind(config.processing.logo_opacity)
         .bind(config.processing.logo_position)
-        .bind(config.processing.volume)
         .bind(config.processing.vtt_enable)
         .bind(config.processing.vtt_dummy)
         .bind(config.processing.vtt_name)
@@ -108,6 +107,21 @@ pub async fn update_configuration(
         .execute(pool)
         .await?;
 
+    sqlx::query("UPDATE audio_config SET volume = $2, live_loudness_enable = $3, live_loudness_target_lufs = $4, live_loudness_dead_band_lu = $5, live_loudness_max_gain_db = $6, live_loudness_max_attenuation_db = $7, live_loudness_gain_up_db_per_second = $8, live_loudness_gain_down_db_per_second = $9, live_loudness_silence_gate_lufs = $10, live_loudness_true_peak_ceiling_dbtp = $11 WHERE channel_id = (SELECT channel_id FROM configurations WHERE id = $1)")
+        .bind(id)
+        .bind(config.audio.volume)
+        .bind(config.audio.live_loudness_enable)
+        .bind(config.audio.live_loudness_target_lufs)
+        .bind(config.audio.live_loudness_dead_band_lu)
+        .bind(config.audio.live_loudness_max_gain_db)
+        .bind(config.audio.live_loudness_max_attenuation_db)
+        .bind(config.audio.live_loudness_gain_up_db_per_second)
+        .bind(config.audio.live_loudness_gain_down_db_per_second)
+        .bind(config.audio.live_loudness_silence_gate_lufs)
+        .bind(config.audio.live_loudness_true_peak_ceiling_dbtp)
+        .execute(pool)
+        .await?;
+
     Ok(result)
 }
 
@@ -116,7 +130,7 @@ pub async fn update_configuration_volume(
     id: i32,
     volume: f64,
 ) -> Result<SqliteQueryResult, ProcessError> {
-    const QUERY: &str = "UPDATE configurations SET processing_volume = $2 WHERE id = $1";
+    const QUERY: &str = "UPDATE audio_config SET volume = $2 WHERE channel_id = (SELECT channel_id FROM configurations WHERE id = $1)";
 
     let result = sqlx::query(QUERY)
         .bind(id)
