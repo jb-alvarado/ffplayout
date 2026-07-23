@@ -53,7 +53,7 @@ playlistStore.current = currentDefault
 const timeStr = ref('00:00:00')
 const timer = ref()
 const errorCounter = ref(0)
-const volumeLevel = ref(configStore.playout.processing?.volume ?? 1)
+const volumeLevel = ref(configStore.playout.audio?.volume ?? 1)
 const streamExtension = ref(configStore.channels[configStore.i]?.preview_url.split('.').pop())
 const httpStreamFlv = ref(null)
 const httpFlvSource = ref({
@@ -203,7 +203,7 @@ watch([data], () => {
 
 watch([i], () => {
     resetStatus()
-    volumeLevel.value = configStore.playout.processing?.volume ?? 1
+    volumeLevel.value = configStore.playout.audio?.volume ?? 1
 
     streamUrl.value = `/data/event/${configStore.channels[configStore.i]?.id}?endpoint=playout&uuid=${authStore.uuid}`
 
