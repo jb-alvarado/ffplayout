@@ -356,6 +356,15 @@ pub struct Configuration {
     pub processing_logo_opacity: f64,
     pub processing_logo_position: String,
     pub processing_volume: f64,
+    pub processing_live_loudness_enable: bool,
+    pub processing_live_loudness_target_lufs: f64,
+    pub processing_live_loudness_dead_band_lu: f64,
+    pub processing_live_loudness_max_gain_db: f64,
+    pub processing_live_loudness_max_attenuation_db: f64,
+    pub processing_live_loudness_gain_up_db_per_second: f64,
+    pub processing_live_loudness_gain_down_db_per_second: f64,
+    pub processing_live_loudness_silence_gate_lufs: f64,
+    pub processing_live_loudness_true_peak_ceiling_dbtp: f64,
     #[serde(default)]
     pub processing_vtt_enable: bool,
     #[serde(default)]
@@ -406,7 +415,26 @@ impl Configuration {
             processing_logo_scale: config.processing.logo_scale,
             processing_logo_opacity: config.processing.logo_opacity,
             processing_logo_position: config.processing.logo_position,
-            processing_volume: config.processing.volume,
+            processing_volume: config.audio.volume,
+            processing_live_loudness_enable: config.audio.live_loudness_enable,
+            processing_live_loudness_target_lufs: config.audio.live_loudness_target_lufs,
+            processing_live_loudness_dead_band_lu: config.audio.live_loudness_dead_band_lu,
+            processing_live_loudness_max_gain_db: config.audio.live_loudness_max_gain_db,
+            processing_live_loudness_max_attenuation_db: config
+                .audio
+                .live_loudness_max_attenuation_db,
+            processing_live_loudness_gain_up_db_per_second: config
+                .audio
+                .live_loudness_gain_up_db_per_second,
+            processing_live_loudness_gain_down_db_per_second: config
+                .audio
+                .live_loudness_gain_down_db_per_second,
+            processing_live_loudness_silence_gate_lufs: config
+                .audio
+                .live_loudness_silence_gate_lufs,
+            processing_live_loudness_true_peak_ceiling_dbtp: config
+                .audio
+                .live_loudness_true_peak_ceiling_dbtp,
             processing_vtt_enable: config.processing.vtt_enable,
             processing_vtt_dummy: config.processing.vtt_dummy,
             processing_vtt_name: config.processing.vtt_name,

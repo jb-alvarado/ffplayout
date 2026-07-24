@@ -22,6 +22,8 @@ use crate::{
 pub struct User {
     #[serde(default, skip_serializing)]
     endpoint: Endpoint,
+    #[serde(default)]
+    audio_meter: bool,
     uuid: String,
 }
 
@@ -29,6 +31,7 @@ impl User {
     fn new(uuid: String) -> Self {
         Self {
             endpoint: Endpoint::default(),
+            audio_meter: false,
             uuid,
         }
     }
@@ -100,7 +103,7 @@ pub async fn event_stream(
 
     let mut response = state
         .broadcaster
-        .new_client(manager.clone(), user.endpoint.clone())
+        .new_client(manager.clone(), user.endpoint.clone(), user.audio_meter)
         .await
         .into_response();
 

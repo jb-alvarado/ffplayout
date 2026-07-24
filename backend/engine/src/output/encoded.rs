@@ -14,7 +14,7 @@ use ffmpeg_next as ffmpeg;
 use super::{hls, vtt};
 use crate::{
     HlsHealth,
-    analysis::audio_level::AudioLevelMeter,
+    analysis::{audio_level::AudioLevelMeter, loudness::LoudnessMeter},
     audio_mixer::AudioEffectChain,
     benchmark::{self, Stage},
     clock::PlayoutClock,
@@ -35,6 +35,7 @@ pub(super) struct EncodedOutput {
     vtt_subtitles: bool,
     audio_effects: AudioEffectChain,
     audio_level_meter: AudioLevelMeter,
+    loudness_meter: LoudnessMeter,
     audio_buffer: [VecDeque<f32>; 2],
     audio_buffer_pts: Option<i64>,
     audio_sample_rate: u32,
@@ -353,6 +354,7 @@ impl EncodedOutput {
                 cfg.sample_rate,
                 cfg.audio_level_callback.clone(),
             ),
+            loudness_meter: LoudnessMeter::new(cfg.sample_rate, cfg.loudness_meter_control.clone()),
             audio_buffer: [VecDeque::new(), VecDeque::new()],
             audio_buffer_pts: None,
             audio_sample_rate: cfg.sample_rate,
@@ -407,6 +409,7 @@ impl EncodedOutput {
         benchmark::measure(Stage::AudioProcess, || {
             self.audio_effects.process(&mut frame);
             self.audio_level_meter.process_frame(&frame);
+            self.loudness_meter.process_frame(&frame);
             self.align_audio_buffer_to_frame_pts(frame.pts())?;
             if self.audio_buffer[0].is_empty() {
                 self.audio_buffer_pts = frame.pts();

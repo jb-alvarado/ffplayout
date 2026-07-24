@@ -6,13 +6,12 @@ use std::{
     },
 };
 
+use super::{AUDIO_CHANNELS, AUDIO_DEVICE_BUFFER_SAMPLES, AUDIO_MAX_QUEUE_MS};
 use anyhow::{Context, Result, anyhow};
 use cpal::{
     FromSample, I24, Sample, SampleFormat, SizedSample, U24,
     traits::{DeviceTrait, HostTrait, StreamTrait},
 };
-
-use super::{AUDIO_CHANNELS, AUDIO_DEVICE_BUFFER_SAMPLES, AUDIO_MAX_QUEUE_MS};
 
 pub(super) struct DesktopAudio {
     _stream: cpal::Stream,
@@ -35,11 +34,12 @@ impl DesktopAudio {
         let supported = device
             .supported_output_configs()
             .context("querying supported audio output configurations")?
-            .find(|config| {
+            .filter(|config| {
                 config.channels() as usize == AUDIO_CHANNELS
                     && config.min_sample_rate() <= sample_rate
                     && config.max_sample_rate() >= sample_rate
             })
+            .max_by_key(|config| sample_format_quality(config.sample_format()))
             .ok_or_else(|| {
                 anyhow!("no stereo audio output configuration supports {sample_rate} Hz")
             })?
@@ -155,6 +155,22 @@ impl DesktopAudio {
     }
 }
 
+/// CPAL does not guarantee that `supported_output_configs()` is ordered by
+/// fidelity. Prefer floating-point PCM, then the widest integer formats, so a
+/// device's legacy 8-bit configuration is never chosen merely because it was
+/// listed first.
+fn sample_format_quality(format: SampleFormat) -> u8 {
+    match format {
+        SampleFormat::F32 => 100,
+        SampleFormat::F64 => 90,
+        SampleFormat::I32 | SampleFormat::U32 => 80,
+        SampleFormat::I24 | SampleFormat::U24 => 70,
+        SampleFormat::I16 | SampleFormat::U16 => 60,
+        SampleFormat::I8 | SampleFormat::U8 => 10,
+        _ => 0,
+    }
+}
+
 fn build_audio_stream<T>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
@@ -206,6 +222,12 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prefers_high_fidelity_pcm_formats() {
+        assert!(sample_format_quality(SampleFormat::F32) > sample_format_quality(SampleFormat::I16));
+        assert!(sample_format_quality(SampleFormat::I16) > sample_format_quality(SampleFormat::U8));
+    }
 
     #[test]
     fn paused_callback_keeps_buffered_frames_for_prebuffering() {

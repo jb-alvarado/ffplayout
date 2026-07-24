@@ -27,7 +27,11 @@ mod playout;
 mod utils;
 
 pub use analysis::audio_level::{AudioLevel, AudioLevelCallback};
-pub use audio_mixer::AudioEffectsControl;
+pub use analysis::loudness::{LoudnessMeterControl, LoudnessMetrics};
+pub use audio_mixer::{
+    AudioEffectsControl, LiveLoudnessConfig, LiveLoudnessControl, LiveLoudnessMeasurement,
+    LiveLoudnessMetrics, LiveLoudnessProcessor,
+};
 use input::live::{LiveEnded, LiveOverrideOutput};
 pub use input::live::{LiveReceiver, spawn_rtmp_listener};
 #[cfg(all(feature = "desktop-base", feature = "tokio"))]

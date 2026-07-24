@@ -7,11 +7,9 @@
 //! own thread so audio and video scheduling continue while a platform window
 //! enters a modal move/resize loop.
 
-use std::{
-    sync::{OnceLock, mpsc},
-    thread,
-    time::Duration,
-};
+use std::sync::{OnceLock, mpsc};
+#[cfg(feature = "tokio")]
+use std::{thread, time::Duration};
 
 use anyhow::{Result, anyhow};
 
@@ -22,6 +20,7 @@ static DESKTOP_MAIN_THREAD: OnceLock<mpsc::SyncSender<Job>> = OnceLock::new();
 /// Runs the application work on a background thread while this (calling)
 /// thread owns all desktop window jobs. Must be called from `main` before a
 /// desktop `AsyncPlayout` is opened.
+#[cfg(feature = "tokio")]
 pub fn run_on_main_thread<R: Send + 'static>(background: impl FnOnce() -> R + Send + 'static) -> R {
     let (jobs_tx, jobs_rx) = mpsc::sync_channel::<Job>(64);
     if DESKTOP_MAIN_THREAD.set(jobs_tx).is_err() {
@@ -41,15 +40,18 @@ pub fn run_on_main_thread<R: Send + 'static>(background: impl FnOnce() -> R + Se
             Ok(job) => job(),
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => {
-                return done_rx
+                let result = done_rx
                     .recv()
                     .expect("ffplayout runtime stopped without a result");
+                super::release_desktop_window();
+                return result;
             }
         }
 
         super::pump_desktop_window_events();
 
         if let Ok(result) = done_rx.try_recv() {
+            super::release_desktop_window();
             return result;
         }
     }

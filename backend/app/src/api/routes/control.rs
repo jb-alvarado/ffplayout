@@ -55,7 +55,7 @@ pub async fn update_audio_effects(
         .set_volume(update.volume)
         .map_err(|error| ServiceError::BadRequest(error.to_string()))?;
 
-    manager.config.write().await.processing.volume = update.volume;
+    manager.config.write().await.audio.volume = update.volume;
 
     Ok(Json("Success"))
 }

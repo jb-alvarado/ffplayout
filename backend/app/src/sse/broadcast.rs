@@ -24,6 +24,7 @@ use crate::{
 struct Client {
     manager: ChannelManager,
     endpoint: Endpoint,
+    audio_meter: bool,
     sender: mpsc::Sender<Result<Event, Infallible>>,
 }
 
@@ -31,11 +32,13 @@ impl Client {
     fn new(
         manager: ChannelManager,
         endpoint: Endpoint,
+        audio_meter: bool,
         sender: mpsc::Sender<Result<Event, Infallible>>,
     ) -> Self {
         Self {
             manager,
             endpoint,
+            audio_meter,
             sender,
         }
     }
@@ -89,6 +92,7 @@ impl Broadcaster {
         &self,
         manager: ChannelManager,
         endpoint: Endpoint,
+        audio_meter: bool,
     ) -> impl IntoResponse {
         let (tx, rx) = mpsc::channel(10);
 
@@ -96,7 +100,10 @@ impl Broadcaster {
             .await
             .unwrap();
 
-        let client = Client::new(manager, endpoint, tx);
+        if audio_meter {
+            manager.loudness_meter.subscribe();
+        }
+        let client = Client::new(manager, endpoint, audio_meter, tx);
         self.inner.lock().await.clients.push(client);
 
         Sse::new(ReceiverStream::new(rx)).keep_alive(KeepAlive::default())
@@ -143,9 +150,13 @@ impl Broadcaster {
 
         let mut inner = self.inner.lock().await;
         inner.clients.retain(|client| {
-            !failed_clients
+            let remove = failed_clients
                 .iter()
-                .any(|failed| failed.same_channel(&client.sender))
+                .any(|failed| failed.same_channel(&client.sender));
+            if remove && client.audio_meter {
+                client.manager.loudness_meter.unsubscribe();
+            }
+            !remove
         });
     }
 }

@@ -240,6 +240,7 @@ declare global {
         media: PlaylistItem
         index: number
         audio?: AudioLevel
+        loudness?: LiveLoudnessMetrics
         ingest: boolean
         mode: string
         elapsed: number
@@ -250,6 +251,15 @@ declare global {
     interface AudioLevel {
         rms_db: number
         peak_db: number
+    }
+
+    interface LiveLoudnessMetrics {
+        momentary_lufs: number | null
+        short_term_lufs: number | null
+        integrated_lufs: number | null
+        true_peak_dbtp: number | null
+        rider_gain_db: number
+        limiter_gain_reduction_db: number
     }
 
     interface SplitTime {

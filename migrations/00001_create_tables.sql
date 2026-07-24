@@ -134,7 +134,6 @@ CREATE TABLE IF NOT EXISTS configurations (
     processing_logo_scale TEXT NOT NULL DEFAULT '',
     processing_logo_opacity REAL NOT NULL DEFAULT 0.7,
     processing_logo_position TEXT NOT NULL DEFAULT 'W-w-12:12',
-    processing_volume REAL NOT NULL DEFAULT 1.0,
     processing_vtt_enable INTEGER NOT NULL DEFAULT 0,
     processing_vtt_dummy TEXT DEFAULT '00-assets/dummy.vtt',
     processing_vtt_name TEXT NOT NULL DEFAULT 'Subtitles',
@@ -155,6 +154,21 @@ CREATE TABLE IF NOT EXISTS configurations (
     FOREIGN KEY (channel_id) REFERENCES channels (id) ON UPDATE CASCADE ON DELETE CASCADE,
     FOREIGN KEY (output_id) REFERENCES outputs (id) ON UPDATE CASCADE,
     FOREIGN KEY (text_preset_id) REFERENCES text_presets (id) ON UPDATE CASCADE ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS audio_config (
+    channel_id INTEGER PRIMARY KEY,
+    volume REAL NOT NULL DEFAULT 1.0,
+    live_loudness_enable INTEGER NOT NULL DEFAULT 0,
+    live_loudness_target_lufs REAL NOT NULL DEFAULT -23.0,
+    live_loudness_dead_band_lu REAL NOT NULL DEFAULT 1.0,
+    live_loudness_max_gain_db REAL NOT NULL DEFAULT 8.0,
+    live_loudness_max_attenuation_db REAL NOT NULL DEFAULT -12.0,
+    live_loudness_gain_up_db_per_second REAL NOT NULL DEFAULT 0.5,
+    live_loudness_gain_down_db_per_second REAL NOT NULL DEFAULT 2.0,
+    live_loudness_silence_gate_lufs REAL NOT NULL DEFAULT -60.0,
+    live_loudness_true_peak_ceiling_dbtp REAL NOT NULL DEFAULT -1.0,
+    FOREIGN KEY (channel_id) REFERENCES channels (id) ON UPDATE CASCADE ON DELETE CASCADE
 );
 
 INSERT OR IGNORE INTO
@@ -392,3 +406,8 @@ INSERT OR IGNORE INTO
     configurations (id, channel_id, output_id)
 VALUES
     (1, 1, 1);
+
+INSERT OR IGNORE INTO
+    audio_config (channel_id)
+VALUES
+    (1);

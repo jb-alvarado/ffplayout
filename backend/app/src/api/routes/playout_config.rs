@@ -94,12 +94,7 @@ fn requires_playout_restart(current: &PlayoutConfig, updated: &PlayoutConfig) ->
         };
 
         config.remove("mail");
-        if let Some(processing) = config
-            .get_mut("processing")
-            .and_then(serde_json::Value::as_object_mut)
-        {
-            processing.remove("volume");
-        }
+        config.remove("audio");
     }
 
     current != updated
@@ -267,8 +262,9 @@ pub async fn update_playout_config(
             )));
         }
     }
-    ff_engine::AudioEffectsControl::new(data.processing.volume)
+    ff_engine::AudioEffectsControl::new(data.audio.volume)
         .map_err(|error| ServiceError::BadRequest(error.to_string()))?;
+    validate_live_loudness(&data.audio)?;
     data.output.validate().map_err(ServiceError::BadRequest)?;
 
     let is_hls = data.output.mode == OutputMode::HLS;
@@ -328,11 +324,41 @@ pub async fn update_playout_config(
     let requires_restart = requires_playout_restart(&config, &new_config);
     manager
         .audio_effects
-        .set_volume(new_config.processing.volume)
+        .set_volume(new_config.audio.volume)
         .map_err(|error| ServiceError::BadRequest(error.to_string()))?;
+    manager.live_loudness.update(
+        new_config.audio.live_loudness_enable,
+        crate::player::controller::live_loudness_config(&new_config.audio),
+    );
     manager.update_config(new_config).await;
 
     Ok(Json(PlayoutConfigUpdate { requires_restart }))
+}
+
+fn validate_live_loudness(processing: &crate::utils::config::Audio) -> Result<(), ServiceError> {
+    let values = [
+        processing.live_loudness_target_lufs,
+        processing.live_loudness_dead_band_lu,
+        processing.live_loudness_max_gain_db,
+        processing.live_loudness_max_attenuation_db,
+        processing.live_loudness_gain_up_db_per_second,
+        processing.live_loudness_gain_down_db_per_second,
+        processing.live_loudness_silence_gate_lufs,
+        processing.live_loudness_true_peak_ceiling_dbtp,
+    ];
+    if values.iter().any(|value| !value.is_finite())
+        || processing.live_loudness_dead_band_lu < 0.0
+        || processing.live_loudness_max_gain_db < 0.0
+        || processing.live_loudness_max_attenuation_db > 0.0
+        || processing.live_loudness_gain_up_db_per_second < 0.0
+        || processing.live_loudness_gain_down_db_per_second < 0.0
+        || processing.live_loudness_true_peak_ceiling_dbtp > 0.0
+    {
+        return Err(ServiceError::BadRequest(
+            "invalid live loudness settings".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 /// **Get Output**
@@ -391,7 +417,17 @@ mod tests {
         let current = PlayoutConfig::default();
         let mut updated = current.clone();
         updated.mail.recipient = "ops@example.org".to_string();
-        updated.processing.volume = 0.75;
+        updated.audio.volume = 0.75;
+
+        assert!(!requires_playout_restart(&current, &updated));
+    }
+
+    #[test]
+    fn live_loudness_changes_do_not_require_restart() {
+        let current = PlayoutConfig::default();
+        let mut updated = current.clone();
+        updated.audio.live_loudness_enable = true;
+        updated.audio.live_loudness_target_lufs = -23.0;
 
         assert!(!requires_playout_restart(&current, &updated));
     }

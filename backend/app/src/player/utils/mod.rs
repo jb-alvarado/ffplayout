@@ -135,6 +135,18 @@ pub async fn get_data_map(manager: &ChannelManager) -> Map<String, Value> {
             }),
         );
     }
+    if let Some(metrics) = manager.loudness_meter.metrics() {
+        let round = |value: Option<f64>| value.map(|value| (value * 10.0).round() / 10.0);
+        data_map.insert(
+            "loudness".to_string(),
+            json!({
+                "momentary_lufs": round(metrics.momentary_lufs),
+                "short_term_lufs": round(metrics.short_term_lufs),
+                "integrated_lufs": round(metrics.integrated_lufs),
+                "true_peak_dbtp": round(metrics.true_peak_dbtp),
+            }),
+        );
+    }
 
     data_map
 }

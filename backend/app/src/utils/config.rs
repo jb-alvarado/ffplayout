@@ -177,6 +177,7 @@ pub struct PlayoutConfig {
     pub mail: Mail,
     pub logging: Logging,
     pub processing: Processing,
+    pub audio: Audio,
     pub ingest: Ingest,
     pub playlist: Playlist,
     pub storage: Storage,
@@ -359,7 +360,6 @@ pub struct Processing {
     pub logo_scale: String,
     pub logo_opacity: f64,
     pub logo_position: String,
-    pub volume: f64,
     #[serde(default)]
     pub vtt_enable: bool,
     #[serde(default)]
@@ -390,7 +390,6 @@ impl Processing {
             logo_scale: config.processing_logo_scale.clone(),
             logo_opacity: config.processing_logo_opacity,
             logo_position: config.processing_logo_position.clone(),
-            volume: config.processing_volume,
             vtt_enable: config.processing_vtt_enable,
             vtt_dummy: config.processing_vtt_dummy.clone(),
             vtt_name: config.processing_vtt_name.clone(),
@@ -411,6 +410,41 @@ impl Processing {
         };
         subtitle.validate()?;
         Ok(Some(subtitle))
+    }
+}
+
+#[derive(Debug, Default, Clone, Deserialize, Serialize, TS)]
+#[ts(export, export_to = "playout_config.d.ts")]
+pub struct Audio {
+    pub volume: f64,
+    pub live_loudness_enable: bool,
+    pub live_loudness_target_lufs: f64,
+    pub live_loudness_dead_band_lu: f64,
+    pub live_loudness_max_gain_db: f64,
+    pub live_loudness_max_attenuation_db: f64,
+    pub live_loudness_gain_up_db_per_second: f64,
+    pub live_loudness_gain_down_db_per_second: f64,
+    pub live_loudness_silence_gate_lufs: f64,
+    pub live_loudness_true_peak_ceiling_dbtp: f64,
+}
+
+impl Audio {
+    fn new(config: &models::Configuration) -> Self {
+        Self {
+            volume: config.processing_volume,
+            live_loudness_enable: config.processing_live_loudness_enable,
+            live_loudness_target_lufs: config.processing_live_loudness_target_lufs,
+            live_loudness_dead_band_lu: config.processing_live_loudness_dead_band_lu,
+            live_loudness_max_gain_db: config.processing_live_loudness_max_gain_db,
+            live_loudness_max_attenuation_db: config.processing_live_loudness_max_attenuation_db,
+            live_loudness_gain_up_db_per_second: config
+                .processing_live_loudness_gain_up_db_per_second,
+            live_loudness_gain_down_db_per_second: config
+                .processing_live_loudness_gain_down_db_per_second,
+            live_loudness_silence_gate_lufs: config.processing_live_loudness_silence_gate_lufs,
+            live_loudness_true_peak_ceiling_dbtp: config
+                .processing_live_loudness_true_peak_ceiling_dbtp,
+        }
     }
 }
 
@@ -871,6 +905,7 @@ impl PlayoutConfig {
         let mail = Mail::new(&global, &config);
         let logging = Logging::new(&config);
         let mut processing = Processing::new(&config);
+        let audio = Audio::new(&config);
         let ingest = Ingest::new(&config);
         let mut playlist = Playlist::new(&config);
         let text = Text::new(&config, text_preset);
@@ -914,6 +949,7 @@ impl PlayoutConfig {
             mail,
             logging,
             processing,
+            audio,
             ingest,
             playlist,
             storage,
@@ -1023,7 +1059,7 @@ pub async fn get_config(
     }
 
     if let Some(volume) = args.volume {
-        config.processing.volume = volume;
+        config.audio.volume = volume;
     }
 
     if let Some(smtp_server) = args.smtp_server {

@@ -25,7 +25,10 @@ use winit::{
 
 use super::{FrameOutput, PlaybackStopped, vtt};
 use crate::{
-    analysis::audio_level::{AudioLevelCallback, AudioLevelMeter},
+    analysis::{
+        audio_level::{AudioLevelCallback, AudioLevelMeter},
+        loudness::LoudnessMeter,
+    },
     audio_mixer::{AudioEffectChain, AudioEffectsControl},
     benchmark::{self, BenchHandle, Stage},
     compositor::logo::LogoOverlay,
@@ -114,6 +117,7 @@ pub(super) struct DesktopOutput {
     renderer: DesktopRenderer,
     audio_effects: Arc<Mutex<AudioEffectChain>>,
     audio_level_callback: Option<AudioLevelCallback>,
+    loudness_meter_control: crate::LoudnessMeterControl,
     audio_sample_rate: u32,
 }
 
@@ -157,6 +161,7 @@ pub(crate) struct DesktopFrameSender {
     discontinuity_sender: SyncSender<DesktopDiscontinuity>,
     audio_effects: Arc<Mutex<AudioEffectChain>>,
     audio_level_meter: AudioLevelMeter,
+    loudness_meter: LoudnessMeter,
     current_logo_opacity: f64,
 }
 
@@ -212,6 +217,7 @@ impl DesktopOutput {
                 cfg.sample_rate,
             ))),
             audio_level_callback: cfg.audio_level_callback.clone(),
+            loudness_meter_control: cfg.loudness_meter_control.clone(),
             audio_sample_rate: cfg.sample_rate,
         })
     }
@@ -243,6 +249,7 @@ impl DesktopOutput {
         let (discontinuity_sender, discontinuity_receiver) = sync_channel(1);
         let audio_effects = Arc::clone(&self.audio_effects);
         let audio_level_callback = self.audio_level_callback.clone();
+        let loudness_meter_control = self.loudness_meter_control.clone();
         let audio_sample_rate = self.audio_sample_rate;
         let worker_benchmark = benchmark.clone();
         let worker = std_thread::Builder::new()
@@ -259,6 +266,7 @@ impl DesktopOutput {
                         audio_sample_rate,
                         audio_level_callback,
                     ),
+                    loudness_meter: LoudnessMeter::new(audio_sample_rate, loudness_meter_control),
                     current_logo_opacity: 0.0,
                 };
                 let _ = output
@@ -349,6 +357,7 @@ impl FrameOutput for DesktopFrameSender {
                 .map_err(|_| anyhow!("audio effect chain lock poisoned"))?
                 .process(&mut frame);
             self.audio_level_meter.process_frame(&frame);
+            self.loudness_meter.process_frame(&frame);
             let left = frame.plane::<f32>(0);
             let right = frame.plane::<f32>(1);
             let mut interleaved = Vec::with_capacity(frame.samples() * AUDIO_CHANNELS);
@@ -1126,6 +1135,16 @@ pub(super) fn pump_desktop_window_events() {
         if let Some(window) = window.borrow_mut().as_mut() {
             window.pump_events();
         }
+    });
+}
+
+/// Releases Winit/WGPU resources while their supporting thread-local state is
+/// still alive. Leaving this to TLS destruction can make WGPU access a TLS
+/// value that Rust has already torn down during process exit.
+#[cfg(feature = "tokio")]
+pub(super) fn release_desktop_window() {
+    let _ = DESKTOP_WINDOW.try_with(|window| {
+        drop(window.borrow_mut().take());
     });
 }
 

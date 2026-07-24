@@ -53,7 +53,7 @@ playlistStore.current = currentDefault
 const timeStr = ref('00:00:00')
 const timer = ref()
 const errorCounter = ref(0)
-const volumeLevel = ref(configStore.playout.processing?.volume ?? 1)
+const volumeLevel = ref(configStore.playout.audio?.volume ?? 1)
 const streamExtension = ref(configStore.channels[configStore.i]?.preview_url.split('.').pop())
 const httpStreamFlv = ref(null)
 const httpFlvSource = ref({
@@ -203,7 +203,7 @@ watch([data], () => {
 
 watch([i], () => {
     resetStatus()
-    volumeLevel.value = configStore.playout.processing?.volume ?? 1
+    volumeLevel.value = configStore.playout.audio?.volume ?? 1
 
     streamUrl.value = `/data/event/${configStore.channels[configStore.i]?.id}?endpoint=playout&uuid=${authStore.uuid}`
 
@@ -247,7 +247,7 @@ function volumeIcon() {
 const applyVolumeControl = throttle(async () => {
     const volume = Math.min(1.5, Math.max(0, Number(volumeLevel.value) || 0))
     volumeLevel.value = volume
-    configStore.playout.processing.volume = volume
+    configStore.playout.audio.volume = volume
 
     try {
         const response = await configStore.applyAudioEffects(volume)
@@ -261,13 +261,13 @@ const applyVolumeControl = throttle(async () => {
 }, 250)
 
 function muteAudio() {
-    if (configStore.playout.processing.volume === 0) {
+    if (configStore.playout.audio.volume === 0) {
         volumeLevel.value = 1
     } else {
         volumeLevel.value = 0
     }
 
-    configStore.playout.processing.volume = volumeLevel.value
+    configStore.playout.audio.volume = volumeLevel.value
     configStore.applyAudioEffects(volumeLevel.value)
 }
 
