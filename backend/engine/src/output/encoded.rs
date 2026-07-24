@@ -354,10 +354,7 @@ impl EncodedOutput {
                 cfg.sample_rate,
                 cfg.audio_level_callback.clone(),
             ),
-            loudness_meter: LoudnessMeter::new(
-                cfg.sample_rate,
-                cfg.loudness_meter_control.clone(),
-            ),
+            loudness_meter: LoudnessMeter::new(cfg.sample_rate, cfg.loudness_meter_control.clone()),
             audio_buffer: [VecDeque::new(), VecDeque::new()],
             audio_buffer_pts: None,
             audio_sample_rate: cfg.sample_rate,

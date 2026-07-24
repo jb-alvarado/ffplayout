@@ -6,13 +6,12 @@ use std::{
     },
 };
 
+use super::{AUDIO_CHANNELS, AUDIO_DEVICE_BUFFER_SAMPLES, AUDIO_MAX_QUEUE_MS};
 use anyhow::{Context, Result, anyhow};
 use cpal::{
     FromSample, I24, Sample, SampleFormat, SizedSample, U24,
     traits::{DeviceTrait, HostTrait, StreamTrait},
 };
-
-use super::{AUDIO_CHANNELS, AUDIO_DEVICE_BUFFER_SAMPLES, AUDIO_MAX_QUEUE_MS};
 
 pub(super) struct DesktopAudio {
     _stream: cpal::Stream,

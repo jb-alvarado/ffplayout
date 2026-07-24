@@ -25,7 +25,10 @@ use winit::{
 
 use super::{FrameOutput, PlaybackStopped, vtt};
 use crate::{
-    analysis::{audio_level::{AudioLevelCallback, AudioLevelMeter}, loudness::LoudnessMeter},
+    analysis::{
+        audio_level::{AudioLevelCallback, AudioLevelMeter},
+        loudness::LoudnessMeter,
+    },
     audio_mixer::{AudioEffectChain, AudioEffectsControl},
     benchmark::{self, BenchHandle, Stage},
     compositor::logo::LogoOverlay,

@@ -7,7 +7,10 @@ use std::{
 
 use ffmpeg_next::{Rational, util::log::Level as FfmpegLevel};
 
-use crate::{AudioEffectsControl, AudioLevelCallback, LiveLoudnessConfig, LiveLoudnessControl, LoudnessMeterControl};
+use crate::{
+    AudioEffectsControl, AudioLevelCallback, LiveLoudnessConfig, LiveLoudnessControl,
+    LoudnessMeterControl,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HlsVariant {
