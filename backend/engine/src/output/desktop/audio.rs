@@ -225,7 +225,9 @@ mod tests {
 
     #[test]
     fn prefers_high_fidelity_pcm_formats() {
-        assert!(sample_format_quality(SampleFormat::F32) > sample_format_quality(SampleFormat::I16));
+        assert!(
+            sample_format_quality(SampleFormat::F32) > sample_format_quality(SampleFormat::I16)
+        );
         assert!(sample_format_quality(SampleFormat::I16) > sample_format_quality(SampleFormat::U8));
     }
 
