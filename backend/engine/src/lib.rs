@@ -29,6 +29,7 @@ mod utils;
 pub use analysis::audio_level::{AudioLevel, AudioLevelCallback};
 pub use audio_mixer::{
     AudioEffectsControl, LiveLoudnessConfig, LiveLoudnessControl, LiveLoudnessMetrics,
+    LiveLoudnessProcessor,
 };
 use input::live::{LiveEnded, LiveOverrideOutput};
 pub use input::live::{LiveReceiver, spawn_rtmp_listener};
