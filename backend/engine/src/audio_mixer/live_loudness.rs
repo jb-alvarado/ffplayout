@@ -54,6 +54,7 @@ pub struct LiveLoudnessControl(Arc<RwLock<LiveLoudnessSettings>>);
 pub struct LiveLoudnessSettings {
     pub enabled: bool,
     pub config: LiveLoudnessConfig,
+    pub metrics: LiveLoudnessMetrics,
 }
 
 impl LiveLoudnessControl {
@@ -61,6 +62,7 @@ impl LiveLoudnessControl {
         Self(Arc::new(RwLock::new(LiveLoudnessSettings {
             enabled,
             config,
+            metrics: LiveLoudnessMetrics::default(),
         })))
     }
 
@@ -72,11 +74,29 @@ impl LiveLoudnessControl {
     }
 
     pub fn update(&self, enabled: bool, config: LiveLoudnessConfig) {
-        *self
+        let mut settings = self
             .0
             .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) =
-            LiveLoudnessSettings { enabled, config };
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *settings = LiveLoudnessSettings {
+            enabled,
+            config,
+            metrics: LiveLoudnessMetrics::default(),
+        };
+    }
+
+    pub fn metrics(&self) -> LiveLoudnessMetrics {
+        self.0
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .metrics
+    }
+
+    pub(crate) fn set_metrics(&self, metrics: LiveLoudnessMetrics) {
+        self.0
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .metrics = metrics;
     }
 }
 
@@ -92,6 +112,16 @@ pub struct LiveLoudnessMetrics {
     pub limiter_gain_reduction_db: f64,
 }
 
+/// Measurement window used by the gain rider.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum LiveLoudnessMeasurement {
+    /// The EBU R128 three-second short-term measurement.
+    #[default]
+    ShortTerm,
+    /// The EBU R128 400 ms momentary measurement.
+    Momentary,
+}
+
 /// Stateful EBU R128 analyzer, slow gain rider and ceiling limiter.
 ///
 /// `ebur128-stream` performs the 4x true-peak measurement. The limiter is a
@@ -101,6 +131,7 @@ pub struct LiveLoudnessProcessor {
     analyzer: Analyzer,
     config: LiveLoudnessConfig,
     sample_rate: u32,
+    measurement: LiveLoudnessMeasurement,
     rider_gain_db: f64,
     metrics: LiveLoudnessMetrics,
 }
@@ -119,6 +150,7 @@ impl LiveLoudnessProcessor {
             analyzer,
             config,
             sample_rate,
+            measurement: LiveLoudnessMeasurement::default(),
             rider_gain_db: 0.0,
             metrics: LiveLoudnessMetrics::default(),
         })
@@ -132,10 +164,22 @@ impl LiveLoudnessProcessor {
         self.config
     }
 
+    pub fn set_measurement(&mut self, measurement: LiveLoudnessMeasurement) {
+        self.measurement = measurement;
+    }
+
     /// Processes one normalized stereo frame in place. Non-finite samples are
     /// sanitized before analysis so malformed live input cannot poison the
     /// analyzer or encoder.
     pub fn process(&mut self, frame: &mut frame::Audio) {
+        self.analyze(frame);
+        self.apply_gain(frame);
+    }
+
+    /// Updates loudness metrics and the gain rider without changing samples.
+    /// This is used by offline/lookahead callers that apply the resulting gain
+    /// to an earlier buffered frame.
+    pub fn analyze(&mut self, frame: &mut frame::Audio) {
         if frame.planes() != 2 || frame.samples() == 0 {
             return;
         }
@@ -159,17 +203,29 @@ impl LiveLoudnessProcessor {
         self.metrics.true_peak_dbtp = snapshot.true_peak_dbtp();
 
         self.update_rider(frame.samples());
+    }
+
+    /// Applies the current rider gain and safety ceiling to a frame previously
+    /// passed to [`Self::analyze`].
+    pub fn apply_gain(&mut self, frame: &mut frame::Audio) {
+        if frame.planes() != 2 || frame.samples() == 0 {
+            return;
+        }
         self.apply_gain_and_ceiling(frame);
     }
 
     fn update_rider(&mut self, samples: usize) {
-        let Some(short_term) = self.metrics.short_term_lufs else {
+        let loudness = match self.measurement {
+            LiveLoudnessMeasurement::ShortTerm => self.metrics.short_term_lufs,
+            LiveLoudnessMeasurement::Momentary => self.metrics.momentary_lufs,
+        };
+        let Some(loudness) = loudness else {
             return;
         };
-        if short_term < self.config.silence_gate_lufs {
+        if loudness < self.config.silence_gate_lufs {
             return;
         }
-        let error = self.config.target_lufs - short_term;
+        let error = self.config.target_lufs - loudness;
         let desired = if error.abs() <= self.config.dead_band_lu {
             0.0
         } else {

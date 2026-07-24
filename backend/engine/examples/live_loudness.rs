@@ -1,24 +1,28 @@
 //! Offline reference runner for the engine's live loudness processor.
 //!
 //! ```text
-//! cargo run -p ff-engine --example live_loudness -- INPUT_FILE [-17]
+//! cargo run -p ff-engine --example live_loudness -- INPUT_FILE --target-lufs -17 --max-gain-db 16
 //! ```
 //!
-//! The video stream is copied; the first audio stream is decoded, normalized by
-//! [`LiveLoudnessProcessor`], and encoded as 128 kbit/s Opus.  No external
-//! `ffmpeg` executable is used.
+//! When present, the video stream is copied into an MP4. The first audio stream
+//! is decoded, normalized by [`LiveLoudnessProcessor`], and encoded as 128
+//! kbit/s Opus. Audio-only inputs produce an `.opus` file. No external `ffmpeg`
+//! executable is used.
 
 use std::{
-    env,
+    collections::VecDeque,
     io::{self, Write},
     path::{Path, PathBuf},
 };
 
 use anyhow::{Context, Result, bail};
-use ff_engine::{LiveLoudnessConfig, LiveLoudnessProcessor};
+use clap::{Parser, ValueEnum};
+use ff_engine::{
+    LiveLoudnessConfig, LiveLoudnessMeasurement, LiveLoudnessMetrics, LiveLoudnessProcessor,
+};
 use ffmpeg::Rescale;
 use ffmpeg::{
-    codec, encoder, format, frame, media,
+    Stream, codec, encoder, format, frame, media,
     rescale::TIME_BASE,
     software::resampling,
     util::{
@@ -31,26 +35,133 @@ use ffmpeg_next as ffmpeg;
 const SAMPLE_RATE: u32 = 48_000;
 const CHANNELS: usize = 2;
 
-fn main() -> Result<()> {
-    let (input, target_lufs) = arguments()?;
-    let output = output_path(&input)?;
-    if output.exists() {
-        bail!("output file already exists: {}", output.display());
-    }
+#[derive(Clone, Copy, Debug, Default, ValueEnum)]
+enum AnalysisMode {
+    /// Analyze and correct each frame immediately; no added delay.
+    #[default]
+    ImmediateShortTerm,
+    /// Buffer 500 ms and drive the rider from EBU R128 momentary loudness.
+    Momentary500ms,
+    /// Buffer 3 seconds and drive the rider from EBU R128 short-term loudness.
+    ShortTerm3s,
+}
 
+impl AnalysisMode {
+    fn file_suffix(self) -> &'static str {
+        match self {
+            Self::ImmediateShortTerm => "immediate-short-term",
+            Self::Momentary500ms => "momentary-500ms",
+            Self::ShortTerm3s => "short-term-3s",
+        }
+    }
+}
+
+#[derive(Debug, Parser)]
+#[command(
+    about = "Normalize an audio stream with the engine's live loudness processor",
+    after_help = "The immediate mode follows short-term loudness rather than forcing programme-integrated loudness. The lookahead modes use either 400 ms momentary or 3-second short-term loudness.\n\nFor unusually quiet source material, a target of -17 LUFS may require more than the conservative default of --max-gain-db 8; for example use --max-gain-db 16."
+)]
+struct Arguments {
+    /// Input audio or video file. Video inputs retain their original video stream.
+    input: PathBuf,
+
+    /// Overwrite an existing output file.
+    #[arg(short = 'y', long)]
+    overwrite: bool,
+
+    /// Loudness analysis/correction mode. Lookahead modes delay audio by the selected window. Options are: immediate-short-term, momentary500ms, short-term3s.
+    #[arg(long, value_enum, default_value_t = AnalysisMode::ImmediateShortTerm)]
+    analysis_mode: AnalysisMode,
+
+    /// Target loudness in LUFS. Higher values are louder; e.g. -17 is louder than -23.
+    #[arg(short = 't', long, default_value_t = -23.0, allow_hyphen_values = true)]
+    target_lufs: f64,
+
+    /// No gain change inside this distance from the target, in LU. A wider band reduces gain movement.
+    #[arg(long, default_value_t = 1.0)]
+    dead_band_lu: f64,
+
+    /// Largest upward gain the live rider may apply, in dB. Increase for very quiet sources; higher values also raise background noise.
+    #[arg(long, default_value_t = 8.0)]
+    max_gain_db: f64,
+
+    /// Largest attenuation the live rider may apply, in dB. This must be zero or negative; e.g. -12 allows reducing loud input by up to 12 dB.
+    #[arg(long, default_value_t = -12.0, allow_hyphen_values = true)]
+    max_attenuation_db: f64,
+
+    /// Maximum upward gain change per second, in dB/s. Smaller values avoid pumping but take longer to lift quiet material.
+    #[arg(long, default_value_t = 0.5)]
+    gain_up_db_per_second: f64,
+
+    /// Maximum downward gain change per second, in dB/s. A higher value reacts more quickly to unexpectedly loud input.
+    #[arg(long, default_value_t = 2.0)]
+    gain_down_db_per_second: f64,
+
+    /// Signals below the selected measurement's loudness are not amplified, in LUFS. This keeps silence and low ambient noise from being raised.
+    #[arg(long, default_value_t = -60.0, allow_hyphen_values = true)]
+    silence_gate_lufs: f64,
+
+    /// Final sample ceiling in dBTP. This is a safety ceiling after the gain rider; it does not replace a look-ahead limiter.
+    #[arg(long, default_value_t = -1.0, allow_hyphen_values = true)]
+    true_peak_ceiling_dbtp: f64,
+}
+
+impl Arguments {
+    fn loudness_config(&self) -> Result<LiveLoudnessConfig> {
+        let values = [
+            self.target_lufs,
+            self.dead_band_lu,
+            self.max_gain_db,
+            self.max_attenuation_db,
+            self.gain_up_db_per_second,
+            self.gain_down_db_per_second,
+            self.silence_gate_lufs,
+            self.true_peak_ceiling_dbtp,
+        ];
+        if values.iter().any(|value| !value.is_finite()) {
+            bail!("all loudness parameters must be finite numbers");
+        }
+        if self.dead_band_lu < 0.0
+            || self.max_gain_db < 0.0
+            || self.max_attenuation_db > 0.0
+            || self.gain_up_db_per_second < 0.0
+            || self.gain_down_db_per_second < 0.0
+        {
+            bail!(
+                "gain limits and rates must be positive; max attenuation must be zero or negative"
+            );
+        }
+        Ok(LiveLoudnessConfig {
+            target_lufs: self.target_lufs,
+            dead_band_lu: self.dead_band_lu,
+            max_gain_db: self.max_gain_db,
+            max_attenuation_db: self.max_attenuation_db,
+            gain_up_db_per_second: self.gain_up_db_per_second,
+            gain_down_db_per_second: self.gain_down_db_per_second,
+            silence_gate_lufs: self.silence_gate_lufs,
+            true_peak_ceiling_dbtp: self.true_peak_ceiling_dbtp,
+        })
+    }
+}
+
+fn main() -> Result<()> {
+    let arguments = Arguments::parse();
+    let input = arguments.input.clone();
+    let loudness_config = arguments.loudness_config()?;
     ffmpeg::init().context("initializing FFmpeg libraries")?;
     let mut input_context = format::input(&input).context("opening input")?;
-    let video_input = input_context
-        .streams()
-        .best(media::Type::Video)
-        .context("input has no video stream")?;
+    let video_input = input_context.streams().best(media::Type::Video);
     let audio_input = input_context
         .streams()
         .best(media::Type::Audio)
         .context("input has no audio stream")?;
-    let video_index = video_input.index();
+    let video_index = video_input.as_ref().map(Stream::index);
     let audio_index = audio_input.index();
-    let video_time_base = video_input.time_base();
+    let audio_time_base = audio_input.time_base();
+    let output = output_path(&input, video_input.is_some(), arguments.analysis_mode)?;
+    if output.exists() && !arguments.overwrite {
+        bail!("output file already exists: {}", output.display());
+    }
     let mut progress = Progress::new(input_context.duration());
 
     let audio_decoder_context = codec::context::Context::from_parameters(audio_input.parameters())?;
@@ -65,17 +176,19 @@ fn main() -> Result<()> {
         SAMPLE_RATE,
     )?;
 
-    let mut output_context = format::output(&output).context("creating MP4 output")?;
-    let video_output_index = {
-        let mut stream = output_context.add_stream(encoder::find(codec::Id::None))?;
-        stream.set_parameters(video_input.parameters());
-        // The input tag can be invalid in an MP4 stream-copy output.
-        unsafe {
-            (*stream.parameters().as_mut_ptr()).codec_tag = 0;
-        }
-        stream.set_time_base(video_time_base);
-        stream.index()
-    };
+    let mut output_context = format::output(&output).context("creating output")?;
+    let video_output_index = video_input
+        .map(|video_input| {
+            let mut stream = output_context.add_stream(encoder::find(codec::Id::None))?;
+            stream.set_parameters(video_input.parameters());
+            // The input tag can be invalid in an MP4 stream-copy output.
+            unsafe {
+                (*stream.parameters().as_mut_ptr()).codec_tag = 0;
+            }
+            stream.set_time_base(video_input.time_base());
+            Ok::<_, anyhow::Error>(stream.index())
+        })
+        .transpose()?;
 
     let opus = codec::encoder::find_by_name("libopus").context("libopus encoder is unavailable")?;
     let global_header = output_context
@@ -117,13 +230,7 @@ fn main() -> Result<()> {
     output_context.set_metadata(input_context.metadata().to_owned());
     output_context.write_header()?;
 
-    let mut processor = LiveLoudnessProcessor::new(
-        SAMPLE_RATE,
-        LiveLoudnessConfig {
-            target_lufs,
-            ..Default::default()
-        },
-    )?;
+    let mut loudness = LoudnessPipeline::new(loudness_config, arguments.analysis_mode)?;
     let frame_size = audio_encoder.frame_size() as usize;
     if frame_size == 0 {
         bail!("libopus reported a zero audio frame size");
@@ -134,23 +241,28 @@ fn main() -> Result<()> {
 
     for (stream, mut packet) in input_context.packets() {
         match stream.index() {
-            index if index == video_index => {
-                progress.report(packet.pts().or_else(|| packet.dts()), video_time_base);
+            index if video_index == Some(index) => {
+                let video_output_index =
+                    video_output_index.context("video output stream missing")?;
+                progress.report(packet.pts().or_else(|| packet.dts()), stream.time_base());
                 let time_base = output_context
                     .stream(video_output_index)
                     .context("video output stream missing")?
                     .time_base();
-                packet.rescale_ts(video_time_base, time_base);
+                packet.rescale_ts(stream.time_base(), time_base);
                 packet.set_position(-1);
                 packet.set_stream(video_output_index);
                 packet.write_interleaved(&mut output_context)?;
             }
             index if index == audio_index => {
+                if video_index.is_none() {
+                    progress.report(packet.pts().or_else(|| packet.dts()), audio_time_base);
+                }
                 audio_decoder.send_packet(&packet)?;
                 decode_and_normalize(
                     &mut audio_decoder,
                     &mut decode_resampler,
-                    &mut processor,
+                    &mut loudness,
                     &mut samples,
                 )?;
                 write_ready_audio(
@@ -171,10 +283,11 @@ fn main() -> Result<()> {
     decode_and_normalize(
         &mut audio_decoder,
         &mut decode_resampler,
-        &mut processor,
+        &mut loudness,
         &mut samples,
     )?;
-    flush_decode_resampler(&mut decode_resampler, &mut processor, &mut samples)?;
+    flush_decode_resampler(&mut decode_resampler, &mut loudness, &mut samples)?;
+    loudness.flush(&mut samples);
     write_ready_audio(
         &mut samples,
         frame_size,
@@ -210,7 +323,7 @@ fn main() -> Result<()> {
 
     progress.finish();
     println!("created: {}", output.display());
-    println!("final metrics: {:?}", processor.metrics());
+    println!("final metrics: {:#?}", loudness.metrics());
     Ok(())
 }
 
@@ -260,10 +373,76 @@ impl Progress {
     }
 }
 
+struct LoudnessPipeline {
+    processor: LiveLoudnessProcessor,
+    lookahead_samples: usize,
+    buffered_samples: usize,
+    pending: VecDeque<frame::Audio>,
+}
+
+impl LoudnessPipeline {
+    fn new(config: LiveLoudnessConfig, mode: AnalysisMode) -> Result<Self> {
+        let mut processor = LiveLoudnessProcessor::new(SAMPLE_RATE, config)?;
+        let lookahead_samples = match mode {
+            AnalysisMode::ImmediateShortTerm => 0,
+            AnalysisMode::Momentary500ms => {
+                processor.set_measurement(LiveLoudnessMeasurement::Momentary);
+                SAMPLE_RATE as usize / 2
+            }
+            AnalysisMode::ShortTerm3s => SAMPLE_RATE as usize * 3,
+        };
+        Ok(Self {
+            processor,
+            lookahead_samples,
+            buffered_samples: 0,
+            pending: VecDeque::new(),
+        })
+    }
+
+    fn process(&mut self, mut frame: frame::Audio, samples: &mut [Vec<f32>; CHANNELS]) {
+        if self.lookahead_samples == 0 {
+            self.processor.process(&mut frame);
+            append_frame(samples, &frame);
+            return;
+        }
+
+        self.processor.analyze(&mut frame);
+        self.buffered_samples += frame.samples();
+        self.pending.push_back(frame);
+        while self.buffered_samples >= self.lookahead_samples {
+            let mut buffered = self
+                .pending
+                .pop_front()
+                .expect("lookahead buffer is not empty");
+            self.buffered_samples -= buffered.samples();
+            self.processor.apply_gain(&mut buffered);
+            append_frame(samples, &buffered);
+        }
+    }
+
+    fn flush(&mut self, samples: &mut [Vec<f32>; CHANNELS]) {
+        while let Some(mut frame) = self.pending.pop_front() {
+            self.processor.apply_gain(&mut frame);
+            append_frame(samples, &frame);
+        }
+        self.buffered_samples = 0;
+    }
+
+    fn metrics(&self) -> LiveLoudnessMetrics {
+        self.processor.metrics()
+    }
+}
+
+fn append_frame(samples: &mut [Vec<f32>; CHANNELS], frame: &frame::Audio) {
+    for (channel, buffer) in samples.iter_mut().enumerate() {
+        buffer.extend_from_slice(frame.plane::<f32>(channel));
+    }
+}
+
 fn decode_and_normalize(
     decoder: &mut codec::decoder::Audio,
     resampler: &mut resampling::Context,
-    processor: &mut LiveLoudnessProcessor,
+    loudness: &mut LoudnessPipeline,
     samples: &mut [Vec<f32>; CHANNELS],
 ) -> Result<()> {
     let mut decoded = frame::Audio::empty();
@@ -271,18 +450,15 @@ fn decode_and_normalize(
         if decoded.channel_layout().is_empty() {
             decoded.set_channel_layout(channel_layout(decoder));
         }
-        let mut converted = resample_frame(resampler, &decoded)?;
-        processor.process(&mut converted);
-        for (channel, buffer) in samples.iter_mut().enumerate() {
-            buffer.extend_from_slice(converted.plane::<f32>(channel));
-        }
+        let converted = resample_frame(resampler, &decoded)?;
+        loudness.process(converted, samples);
     }
     Ok(())
 }
 
 fn flush_decode_resampler(
     resampler: &mut resampling::Context,
-    processor: &mut LiveLoudnessProcessor,
+    loudness: &mut LoudnessPipeline,
     samples: &mut [Vec<f32>; CHANNELS],
 ) -> Result<()> {
     loop {
@@ -292,10 +468,7 @@ fn flush_decode_resampler(
         if resampler.flush(&mut converted)?.is_none() || converted.samples() == 0 {
             return Ok(());
         }
-        processor.process(&mut converted);
-        for (channel, buffer) in samples.iter_mut().enumerate() {
-            buffer.extend_from_slice(converted.plane::<f32>(channel));
-        }
+        loudness.process(converted, samples);
     }
 }
 
@@ -416,29 +589,7 @@ fn preferred_audio_format(codec: codec::codec::Codec) -> Result<Sample> {
         .context("libopus exposes an empty sample format list")
 }
 
-fn arguments() -> Result<(PathBuf, f64)> {
-    let mut arguments = env::args_os().skip(1);
-    let input = arguments
-        .next()
-        .context("usage: live_loudness INPUT_FILE [-17]")?;
-    let target_lufs = arguments
-        .next()
-        .map(|value| {
-            value
-                .into_string()
-                .map_err(|_| anyhow::anyhow!("LUFS target must be UTF-8"))
-        })
-        .transpose()?
-        .map(|value| value.parse::<f64>().context("parsing LUFS target"))
-        .transpose()?
-        .unwrap_or(-23.0);
-    if arguments.next().is_some() || !target_lufs.is_finite() {
-        bail!("usage: live_loudness INPUT_FILE [-17]");
-    }
-    Ok((PathBuf::from(input), target_lufs))
-}
-
-fn output_path(input: &Path) -> Result<PathBuf> {
+fn output_path(input: &Path, has_video: bool, analysis_mode: AnalysisMode) -> Result<PathBuf> {
     if !input.is_file() {
         bail!("input file not found: {}", input.display());
     }
@@ -447,5 +598,9 @@ fn output_path(input: &Path) -> Result<PathBuf> {
         .file_stem()
         .context("input file has no name")?
         .to_string_lossy();
-    Ok(parent.join(format!("{stem} # live_loudness.mp4")))
+    let extension = if has_video { "mp4" } else { "opus" };
+    Ok(parent.join(format!(
+        "{stem} # live_loudness # {}.{extension}",
+        analysis_mode.file_suffix()
+    )))
 }

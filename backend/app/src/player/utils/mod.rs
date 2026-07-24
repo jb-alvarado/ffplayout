@@ -135,6 +135,22 @@ pub async fn get_data_map(manager: &ChannelManager) -> Map<String, Value> {
             }),
         );
     }
+    let loudness_settings = manager.live_loudness.settings();
+    if loudness_settings.enabled {
+        let metrics = manager.live_loudness.metrics();
+        let round = |value: Option<f64>| value.map(|value| (value * 10.0).round() / 10.0);
+        data_map.insert(
+            "loudness".to_string(),
+            json!({
+                "momentary_lufs": round(metrics.momentary_lufs),
+                "short_term_lufs": round(metrics.short_term_lufs),
+                "integrated_lufs": round(metrics.integrated_lufs),
+                "true_peak_dbtp": round(metrics.true_peak_dbtp),
+                "rider_gain_db": (metrics.rider_gain_db * 10.0).round() / 10.0,
+                "limiter_gain_reduction_db": (metrics.limiter_gain_reduction_db * 10.0).round() / 10.0,
+            }),
+        );
+    }
 
     data_map
 }

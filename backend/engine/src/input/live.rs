@@ -502,6 +502,7 @@ impl<'a, O: FrameOutput> LiveOverrideOutput<'a, O> {
         self.sync_loudness_processor();
         if let Some(loudness) = &mut self.live.loudness {
             loudness.process(&mut frame);
+            self.live.loudness_control.set_metrics(loudness.metrics());
         }
         self.output.encode_audio(&frame)?;
         self.remember_audio_frame_end(pts + samples);

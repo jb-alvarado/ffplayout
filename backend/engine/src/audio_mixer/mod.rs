@@ -4,5 +4,6 @@ pub mod volume;
 
 pub use control::*;
 pub use live_loudness::{
-    LiveLoudnessConfig, LiveLoudnessControl, LiveLoudnessMetrics, LiveLoudnessProcessor,
+    LiveLoudnessConfig, LiveLoudnessControl, LiveLoudnessMeasurement, LiveLoudnessMetrics,
+    LiveLoudnessProcessor,
 };

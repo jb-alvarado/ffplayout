@@ -1,12 +1,57 @@
 <script setup lang="ts">
+import { onBeforeUnmount, ref, watch } from 'vue'
+import { useEventSource } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 
+import { useAuth } from '@/stores/auth'
 import { useConfig } from '@/stores/config'
 import { useIndex } from '@/stores/index'
 
 const { t } = useI18n()
+const authStore = useAuth()
 const configStore = useConfig()
 const indexStore = useIndex()
+const audioLevel = ref<AudioLevel | null>(null)
+const loudness = ref<LiveLoudnessMetrics | null>(null)
+const streamUrl = ref(
+    `/data/event/${configStore.channels[configStore.i]?.id}?endpoint=playout&uuid=${authStore.uuid}`,
+)
+
+const { data, close } = useEventSource(streamUrl, [], {
+    autoReconnect: { retries: -1, delay: 1000 },
+})
+
+watch(data, () => {
+    if (!data.value) return
+
+    try {
+        const status = JSON.parse(data.value) as PlayoutStatus
+        audioLevel.value = status.audio ?? null
+        loudness.value = status.loudness ?? null
+    } catch {
+        // The connection banner and keep-alive messages are not status JSON.
+    }
+})
+
+watch(
+    () => configStore.i,
+    () => {
+        audioLevel.value = null
+        loudness.value = null
+        streamUrl.value = `/data/event/${configStore.channels[configStore.i]?.id}?endpoint=playout&uuid=${authStore.uuid}`
+    },
+)
+
+onBeforeUnmount(close)
+
+function meterPercent(value: number | null | undefined, floor = -60) {
+    if (value == null) return 0
+    return Math.min(100, Math.max(0, ((value - floor) / -floor) * 100))
+}
+
+function meterValue(value: number | null | undefined, unit: string) {
+    return value == null ? '—' : `${value.toFixed(1)} ${unit}`
+}
 
 async function saveAudio() {
     const response = await configStore.setPlayoutConfig(configStore.playout)
@@ -24,6 +69,30 @@ async function saveAudio() {
     <div class="max-w-300 xs:pe-8">
         <h2 class="pt-3 text-3xl">Audio</h2>
         <form v-if="configStore.playout" class="mt-10 max-w-3xl" @submit.prevent="saveAudio">
+            <section class="grid gap-4 sm:grid-cols-2" aria-label="Live audio meters">
+                <div class="rounded-box border border-base-300 bg-base-200 p-4">
+                    <div class="flex items-baseline justify-between gap-3">
+                        <h3 class="font-semibold">Volume meter</h3>
+                        <span class="font-mono text-sm">{{ meterValue(audioLevel?.peak_db, 'dBFS') }}</span>
+                    </div>
+                    <div class="mt-3 h-3 overflow-hidden rounded-full bg-base-300">
+                        <div class="h-full bg-success transition-[width] duration-300" :style="{ width: `${meterPercent(audioLevel?.peak_db)}%` }" />
+                    </div>
+                    <p class="mt-2 text-sm text-base-content/70">RMS: {{ meterValue(audioLevel?.rms_db, 'dBFS') }}</p>
+                </div>
+                <div class="rounded-box border border-base-300 bg-base-200 p-4">
+                    <div class="flex items-baseline justify-between gap-3">
+                        <h3 class="font-semibold">Loudness meter</h3>
+                        <span class="font-mono text-sm">{{ meterValue(loudness?.short_term_lufs, 'LUFS') }}</span>
+                    </div>
+                    <div class="mt-3 h-3 overflow-hidden rounded-full bg-base-300">
+                        <div class="h-full bg-primary transition-[width] duration-300" :style="{ width: `${meterPercent(loudness?.short_term_lufs)}%` }" />
+                    </div>
+                    <p class="mt-2 text-sm text-base-content/70">
+                        Integrated: {{ meterValue(loudness?.integrated_lufs, 'LUFS') }} · Gain: {{ meterValue(loudness?.rider_gain_db, 'dB') }}
+                    </p>
+                </div>
+            </section>
             <fieldset class="fieldset">
                 <legend class="fieldset-legend">Volume</legend>
                 <input v-model.number="configStore.playout.audio.volume" type="number" min="0" max="1.5" step="0.001" class="input input-sm w-36" />
