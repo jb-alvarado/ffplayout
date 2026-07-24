@@ -27,6 +27,7 @@ mod playout;
 mod utils;
 
 pub use analysis::audio_level::{AudioLevel, AudioLevelCallback};
+pub use analysis::loudness::{LoudnessMeterControl, LoudnessMetrics};
 pub use audio_mixer::{
     AudioEffectsControl, LiveLoudnessConfig, LiveLoudnessControl, LiveLoudnessMeasurement,
     LiveLoudnessMetrics, LiveLoudnessProcessor,

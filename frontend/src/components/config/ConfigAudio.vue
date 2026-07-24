@@ -14,7 +14,7 @@ const indexStore = useIndex()
 const audioLevel = ref<AudioLevel | null>(null)
 const loudness = ref<LiveLoudnessMetrics | null>(null)
 const streamUrl = ref(
-    `/data/event/${configStore.channels[configStore.i]?.id}?endpoint=playout&uuid=${authStore.uuid}`,
+    `/data/event/${configStore.channels[configStore.i]?.id}?endpoint=playout&audio_meter=true&uuid=${authStore.uuid}`,
 )
 
 const { data, close } = useEventSource(streamUrl, [], {
@@ -38,7 +38,7 @@ watch(
     () => {
         audioLevel.value = null
         loudness.value = null
-        streamUrl.value = `/data/event/${configStore.channels[configStore.i]?.id}?endpoint=playout&uuid=${authStore.uuid}`
+        streamUrl.value = `/data/event/${configStore.channels[configStore.i]?.id}?endpoint=playout&audio_meter=true&uuid=${authStore.uuid}`
     },
 )
 
@@ -86,10 +86,10 @@ async function saveAudio() {
                         <span class="font-mono text-sm">{{ meterValue(loudness?.short_term_lufs, 'LUFS') }}</span>
                     </div>
                     <div class="mt-3 h-3 overflow-hidden rounded-full bg-base-300">
-                        <div class="h-full bg-primary transition-[width] duration-300" :style="{ width: `${meterPercent(loudness?.short_term_lufs)}%` }" />
+                        <div class="h-full bg-success transition-[width] duration-300" :style="{ width: `${meterPercent(loudness?.short_term_lufs)}%` }" />
                     </div>
                     <p class="mt-2 text-sm text-base-content/70">
-                        Integrated: {{ meterValue(loudness?.integrated_lufs, 'LUFS') }} · Gain: {{ meterValue(loudness?.rider_gain_db, 'dB') }}
+                        Integrated: {{ meterValue(loudness?.integrated_lufs, 'LUFS') }} · True peak: {{ meterValue(loudness?.true_peak_dbtp, 'dBTP') }}
                     </p>
                 </div>
             </section>

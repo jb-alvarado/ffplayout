@@ -4,9 +4,10 @@
 //! programme-integrated value.  The latter is a reporting metric and must not
 //! steer a live programme because it never forgets earlier material.
 
-use ebur128_stream::{Analyzer, AnalyzerBuilder, Channel, Mode};
 use ffmpeg_next::frame;
 use std::sync::{Arc, RwLock};
+
+use crate::analysis::loudness::LoudnessAnalyzer;
 
 const TARGET_LUFS: f64 = -23.0;
 const DEAD_BAND_LU: f64 = 1.0;
@@ -128,7 +129,7 @@ pub enum LiveLoudnessMeasurement {
 /// deliberately conservative final sample-domain safety stage. A future
 /// lookahead limiter can replace this stage at the live A/V delay boundary.
 pub struct LiveLoudnessProcessor {
-    analyzer: Analyzer,
+    analyzer: LoudnessAnalyzer,
     config: LiveLoudnessConfig,
     sample_rate: u32,
     measurement: LiveLoudnessMeasurement,
@@ -141,11 +142,7 @@ impl LiveLoudnessProcessor {
         sample_rate: u32,
         config: LiveLoudnessConfig,
     ) -> Result<Self, ebur128_stream::Error> {
-        let analyzer = AnalyzerBuilder::new()
-            .sample_rate(sample_rate)
-            .channels(&[Channel::Left, Channel::Right])
-            .modes(Mode::Momentary | Mode::ShortTerm | Mode::Integrated | Mode::TruePeak)
-            .build()?;
+        let analyzer = LoudnessAnalyzer::new(sample_rate)?;
         Ok(Self {
             analyzer,
             config,
@@ -191,16 +188,11 @@ impl LiveLoudnessProcessor {
             }
         }
 
-        let left = frame.plane::<f32>(0);
-        let right = frame.plane::<f32>(1);
-        if self.analyzer.push_planar::<f32>(&[left, right]).is_err() {
-            return;
-        }
-        let snapshot = self.analyzer.snapshot();
-        self.metrics.momentary_lufs = snapshot.momentary_lufs();
-        self.metrics.short_term_lufs = snapshot.short_term_lufs();
-        self.metrics.integrated_lufs = snapshot.integrated_lufs();
-        self.metrics.true_peak_dbtp = snapshot.true_peak_dbtp();
+        let metrics = self.analyzer.process_frame(frame);
+        self.metrics.momentary_lufs = metrics.momentary_lufs;
+        self.metrics.short_term_lufs = metrics.short_term_lufs;
+        self.metrics.integrated_lufs = metrics.integrated_lufs;
+        self.metrics.true_peak_dbtp = metrics.true_peak_dbtp;
 
         self.update_rider(frame.samples());
     }

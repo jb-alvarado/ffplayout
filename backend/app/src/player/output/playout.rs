@@ -49,6 +49,7 @@ pub async fn player(manager: ChannelManager) -> Result<(), ServiceError> {
         &config,
         manager.audio_effects.clone(),
         manager.live_loudness.clone(),
+        manager.loudness_meter.clone(),
         manager.audio_level.clone(),
         manager.text_overlay.clone(),
         desktop_control_callback(manager.clone()),
@@ -397,6 +398,7 @@ fn engine_output_config(
     config: &PlayoutConfig,
     audio_effects: ff_engine::AudioEffectsControl,
     live_loudness: ff_engine::LiveLoudnessControl,
+    loudness_meter: ff_engine::LoudnessMeterControl,
     audio_level: std::sync::Arc<std::sync::Mutex<Option<ff_engine::AudioLevel>>>,
     text_overlay_state: TextOverlayState,
     desktop_control_callback: ff_engine::DesktopControlCallback,
@@ -443,6 +445,7 @@ fn engine_output_config(
     Ok(OutputConfig::new(width, height, fps, 48_000)
         .with_audio_effects(audio_effects)
         .with_live_loudness_control(live_loudness)
+        .with_loudness_meter_control(loudness_meter)
         .with_audio_level_callback(Some(AudioLevelCallback::new(move |level| {
             if let Ok(mut audio_level) = audio_level.lock() {
                 *audio_level = Some(level);

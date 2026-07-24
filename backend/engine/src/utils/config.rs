@@ -7,7 +7,7 @@ use std::{
 
 use ffmpeg_next::{Rational, util::log::Level as FfmpegLevel};
 
-use crate::{AudioEffectsControl, AudioLevelCallback, LiveLoudnessConfig, LiveLoudnessControl};
+use crate::{AudioEffectsControl, AudioLevelCallback, LiveLoudnessConfig, LiveLoudnessControl, LoudnessMeterControl};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HlsVariant {
@@ -179,6 +179,7 @@ pub struct OutputConfig {
     pub live_loudness: LiveLoudnessConfig,
     pub live_loudness_control: LiveLoudnessControl,
     pub audio_level_callback: Option<AudioLevelCallback>,
+    pub loudness_meter_control: LoudnessMeterControl,
     pub logo: Option<LogoConfig>,
     pub text: Option<TextConfig>,
     pub text_overlay_state: TextOverlayState,
@@ -1043,6 +1044,7 @@ impl OutputConfig {
             live_loudness: LiveLoudnessConfig::default(),
             live_loudness_control: LiveLoudnessControl::new(false, LiveLoudnessConfig::default()),
             audio_level_callback: None,
+            loudness_meter_control: LoudnessMeterControl::default(),
             logo: None,
             text: None,
             text_overlay_state: TextOverlayState::default(),
@@ -1082,6 +1084,11 @@ impl OutputConfig {
 
     pub fn with_audio_level_callback(mut self, callback: Option<AudioLevelCallback>) -> Self {
         self.audio_level_callback = callback;
+        self
+    }
+
+    pub fn with_loudness_meter_control(mut self, control: LoudnessMeterControl) -> Self {
+        self.loudness_meter_control = control;
         self
     }
 
