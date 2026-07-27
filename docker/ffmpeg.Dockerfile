@@ -135,9 +135,15 @@ RUN git clone https://github.com/intel/libvpl.git && \
 
 ARG FFMPEG_VERSION=release/8.1
 ARG FFMPEG_DEBUG=0
+ARG FFMPEG_AVDEVICE=0
+ARG FFMPEG_AVFILTER=0
 
 RUN mkdir -p /ffmpeg-debug && \
     git clone --depth 1 --branch "$FFMPEG_VERSION" https://github.com/FFmpeg/FFmpeg.git && cd FFmpeg && \
+    avdevice_flag=--disable-avdevice && \
+    avfilter_flag=--disable-avfilter && \
+    if [ "$FFMPEG_AVDEVICE" = 1 ]; then avdevice_flag=--enable-avdevice; fi && \
+    if [ "$FFMPEG_AVFILTER" = 1 ]; then avfilter_flag=--enable-avfilter; fi && \
     if ! ./configure \
         --pkg-config-flags=--static \
         --extra-libs="-lm -lpthread" \
@@ -151,7 +157,8 @@ RUN mkdir -p /ffmpeg-debug && \
         --disable-doc \
         --disable-ffplay \
         --disable-shared \
-        --enable-avfilter \
+        "$avdevice_flag" \
+        "$avfilter_flag" \
         --enable-gpl \
         --enable-version3 \
         --enable-nonfree \

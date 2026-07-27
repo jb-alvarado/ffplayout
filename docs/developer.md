@@ -13,8 +13,6 @@ sudo apt install \
     ffmpeg \
     libasound2-dev \
     libavcodec-dev \
-    libavdevice-dev \
-    libavfilter-dev \
     libavformat-dev \
     libavutil-dev \
     libswresample-dev \
@@ -43,6 +41,21 @@ When compiling against a manually installed FFmpeg, make sure `pkg-config` can f
 
 ```bash
 export PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH
+```
+
+`libavfilter` and `libavdevice` are optional and disabled by default to reduce
+the runtime and static-build footprint. ffplayout currently uses its own media
+processing pipeline, so FFmpeg filters such as `drawtext` and FFmpeg devices
+such as DeckLink are unavailable in the normal build.
+
+Enable them independently with the `ffmpeg-filter` or `ffmpeg-device` Cargo
+feature. Local builds additionally need `libavfilter-dev` or `libavdevice-dev`.
+The static-build script maps those features to FFmpeg automatically, for
+example:
+
+```bash
+CARGO_FEATURES=desktop,embed_frontend,ffmpeg-filter,ffmpeg-device \\
+    ./scripts/build.sh debian-static
 ```
 
 ## Processing Benchmark

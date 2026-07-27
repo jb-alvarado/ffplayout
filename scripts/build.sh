@@ -91,14 +91,24 @@ elif [[ $target == "debian-static" ]]; then
     rm -f ./target/release/ffplayout
     mkdir -p ./target/debian-static
 
+    static_cargo_features=${CARGO_FEATURES:-desktop,embed_frontend}
+    ffmpeg_component_args=()
+    if [[ ",$static_cargo_features," == *,ffmpeg-device,* ]]; then
+        ffmpeg_component_args+=(--build-arg FFMPEG_AVDEVICE=1)
+    fi
+    if [[ ",$static_cargo_features," == *,ffmpeg-filter,* ]]; then
+        ffmpeg_component_args+=(--build-arg FFMPEG_AVFILTER=1)
+    fi
+
     docker build \
         --build-arg FFMPEG_DEBUG="${FFMPEG_DEBUG:-0}" \
         --build-arg FFMPEG_VERSION="${FFMPEG_VERSION:-release/8.1}" \
+        "${ffmpeg_component_args[@]}" \
         -t localhost/ffplayout-ffmpeg-static:latest \
         -f ./docker/ffmpeg.Dockerfile .
 
     docker build \
-        --build-arg CARGO_FEATURES="desktop,embed_frontend" \
+        --build-arg CARGO_FEATURES="$static_cargo_features" \
         -t localhost/ffplayout-static-builder:latest \
         -f ./docker/static.Dockerfile .
 

@@ -19,6 +19,8 @@ desktop-cpu = ["desktop-base", "ff-engine/desktop-cpu"]
 embed_frontend = []
 dev-metrics = ["dep:console-subscriber", "dep:tracing-subscriber", "tokio/tracing"]
 processing-bench = ["ff-engine/processing-bench"]
+ffmpeg-filter = ["ff-engine/ffmpeg-filter"]
+ffmpeg-device = ["ff-engine/ffmpeg-device"]
 
 [dependencies]
 ff-engine = { path = "../engine", default-features = false, features = [
