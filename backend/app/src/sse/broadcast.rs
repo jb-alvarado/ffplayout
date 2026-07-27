@@ -10,7 +10,7 @@ use axum::response::{
 };
 use tokio::{
     sync::{Mutex, mpsc},
-    time::interval,
+    time::{MissedTickBehavior, interval},
 };
 use tokio_stream::wrappers::ReceiverStream;
 
@@ -59,6 +59,11 @@ struct BroadcasterInner {
     clients: Vec<Client>,
 }
 
+const SSE_INTERVAL: Duration = Duration::from_millis(250);
+// Keep the system-statistics cadence at one second while playout status is
+// broadcast four times per second.
+const SYSTEM_UPDATE_INTERVAL_TICKS: u64 = 4;
+
 impl Broadcaster {
     /// Constructs new broadcaster and spawns ping loop.
     pub fn create(system: SystemStat) -> Arc<Self> {
@@ -75,14 +80,16 @@ impl Broadcaster {
     /// Broadcasts updates and removes clients that no longer consume them.
     fn spawn_ping(this: Arc<Self>) {
         tokio::spawn(Box::pin(async move {
-            let mut interval = interval(Duration::from_millis(500));
+            let mut interval = interval(SSE_INTERVAL);
+            interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
             let mut tick = 0_u64;
 
             loop {
                 interval.tick().await;
                 tick = tick.wrapping_add(1);
 
-                this.broadcast(tick.is_multiple_of(2)).await;
+                this.broadcast(tick.is_multiple_of(SYSTEM_UPDATE_INTERVAL_TICKS))
+                    .await;
             }
         }));
     }
