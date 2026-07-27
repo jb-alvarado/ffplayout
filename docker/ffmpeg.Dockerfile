@@ -64,66 +64,9 @@ RUN curl --retry 20 --retry-max-time 5 -L -f -o "libpng-1.6.48.tar.gz" "https://
     make -j "$(nproc)" && \
     make install
 
-RUN git clone --depth 1 "https://github.com/fribidi/fribidi.git" && cd fribidi && \
-    meson setup build \
-        --default-library=static \
-        --prefix "$LOCALDESTDIR" \
-        --libdir="$LOCALDESTDIR/lib" \
-        -Ddocs=false \
-        -Dbin=false \
-        -Dtests=false && \
-    ninja -C build && \
-    ninja -C build install
-
-RUN curl --retry 20 --retry-max-time 5 -L -f -o "expat-2.7.1.tar.bz2" "https://github.com/libexpat/libexpat/releases/download/R_2_7_1/expat-2.7.1.tar.bz2" && \
-    tar xf "expat-2.7.1.tar.bz2" && \
-    cd "expat-2.7.1" && \
-    ./configure --prefix="$LOCALDESTDIR" --enable-shared=no --without-docbook && \
-    make -j "$(nproc)" && \
-    make install
-
-RUN curl --retry 20 --retry-max-time 5 -L -f -o "brotli-1.1.0.tar.gz" "https://github.com/google/brotli/archive/refs/tags/v1.1.0.tar.gz" && \
-    tar xf "brotli-1.1.0.tar.gz" && \
-    cd "brotli-1.1.0" && \
-    cmake -S . -B build \
-        -DCMAKE_INSTALL_PREFIX="$LOCALDESTDIR" \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DBUILD_SHARED_LIBS=OFF \
-        -DCMAKE_INSTALL_LIBDIR=lib && \
-    cmake --build build -j "$(nproc)" && \
-    cmake --install build
-
-RUN curl --retry 20 --retry-max-time 5 -L -f -o "freetype-2.13.3.tar.gz" "https://sourceforge.net/projects/freetype/files/freetype2/2.13.3/freetype-2.13.3.tar.gz" && \
-    tar xf "freetype-2.13.3.tar.gz" && \
-    cd "freetype-2.13.3" && \
-    ./configure --prefix="$LOCALDESTDIR" --disable-shared --with-harfbuzz=no && \
-    make -j "$(nproc)" && \
-    make install
-
-RUN git clone --depth 1 --branch 2.16.0 "https://gitlab.freedesktop.org/fontconfig/fontconfig.git" && cd fontconfig && \
-    meson setup build \
-        --default-library=static \
-        --prefix "$LOCALDESTDIR" \
-        --libdir="$LOCALDESTDIR/lib" \
-        -Dcache-build=disabled \
-        -Ddoc=disabled \
-        -Dnls=disabled \
-        -Dtests=disabled \
-        -Dtools=disabled \
-        -Dxml-backend=expat && \
-    ninja -C build && \
-    ninja -C build install
-
 RUN git clone --depth 1 "https://github.com/mstorsjo/fdk-aac" && cd fdk-aac && \
     ./autogen.sh && \
     ./configure --prefix="$LOCALDESTDIR" --enable-shared=no && \
-    make -j "$(nproc)" && \
-    make install
-
-RUN curl --retry 20 --retry-max-time 5 -L -k -f -o "lame-3.100.tar.gz" "https://downloads.sourceforge.net/project/lame/lame/3.100/lame-3.100.tar.gz" && \
-    tar xf "lame-3.100.tar.gz" && \
-    cd "lame-3.100" && \
-    ./configure --prefix="$LOCALDESTDIR" --enable-expopt=full --enable-shared=no && \
     make -j "$(nproc)" && \
     make install
 
@@ -176,22 +119,6 @@ RUN git clone --depth 1 "https://code.videolan.org/videolan/dav1d.git" && cd dav
     ninja && \
     ninja install
 
-RUN git clone --depth 1 --branch 10.2.0 "https://github.com/harfbuzz/harfbuzz.git" && cd harfbuzz && \
-    meson setup build \
-        --default-library=static \
-        --prefix "$LOCALDESTDIR" \
-        --libdir "$LOCALDESTDIR/lib" \
-        -Dglib=disabled \
-        -Dgobject=disabled \
-        -Dicu=disabled \
-        -Dcairo=disabled \
-        -Dchafa=disabled \
-        -Dtests=disabled \
-        -Ddocs=disabled \
-        -Dbenchmark=disabled && \
-    ninja -C build && \
-    ninja -C build install
-
 RUN git clone https://github.com/intel/libvpl.git && \
     cd libvpl && \
     cmake -S . -B build \
@@ -208,9 +135,15 @@ RUN git clone https://github.com/intel/libvpl.git && \
 
 ARG FFMPEG_VERSION=release/8.1
 ARG FFMPEG_DEBUG=0
+ARG FFMPEG_AVDEVICE=0
+ARG FFMPEG_AVFILTER=0
 
 RUN mkdir -p /ffmpeg-debug && \
     git clone --depth 1 --branch "$FFMPEG_VERSION" https://github.com/FFmpeg/FFmpeg.git && cd FFmpeg && \
+    avdevice_flag=--disable-avdevice && \
+    avfilter_flag=--disable-avfilter && \
+    if [ "$FFMPEG_AVDEVICE" = 1 ]; then avdevice_flag=--enable-avdevice; fi && \
+    if [ "$FFMPEG_AVFILTER" = 1 ]; then avfilter_flag=--enable-avfilter; fi && \
     if ! ./configure \
         --pkg-config-flags=--static \
         --extra-libs="-lm -lpthread" \
@@ -224,17 +157,13 @@ RUN mkdir -p /ffmpeg-debug && \
         --disable-doc \
         --disable-ffplay \
         --disable-shared \
-        --enable-avfilter \
+        "$avdevice_flag" \
+        "$avfilter_flag" \
         --enable-gpl \
         --enable-version3 \
         --enable-nonfree \
         --enable-static \
-        --enable-fontconfig \
         --enable-libfdk-aac \
-        --enable-libfribidi \
-        --enable-libfreetype \
-        --enable-libharfbuzz \
-        --enable-libmp3lame \
         --enable-libopus \
         --enable-libsrt \
         --enable-libvpx \
