@@ -2,6 +2,7 @@ import { cloneDeep } from 'es-toolkit/object'
 import { defineStore } from 'pinia'
 import { useRouter } from 'vue-router'
 
+import { authFetch } from '@/composables/authFetch'
 import { useAuth } from './auth'
 import { useIndex } from './index'
 import { i18n } from '../i18n'
@@ -63,30 +64,23 @@ export const useConfig = defineStore('config', {
             const authStore = useAuth()
             const indexStore = useIndex()
 
-            let statusCode = 0
-            await fetch('/api/channels', {
+            await authFetch<Channel[]>('/api/channels', {
                 method: 'GET',
                 headers: authStore.authHeader,
             })
-                .then((response) => {
-                    statusCode = response.status
-
-                    return response
-                })
-                .then((response) => response.json())
                 .then((objs) => {
                     if (!objs[0]) {
                         this.logout()
                         throw new Error('User not found')
                     }
 
-                    this.timezone = objs[0].timezone
+                    this.timezone = objs[0].timezone ?? 'UTC'
                     this.channels = objs
                     this.channelsRaw = cloneDeep(objs)
                     this.configCount = objs.length
                 })
                 .catch((e) => {
-                    if (statusCode === 401) {
+                    if (e.response?.status === 401) {
                         this.logout()
                     }
 
@@ -117,11 +111,10 @@ export const useConfig = defineStore('config', {
             const indexStore = useIndex()
             const id = this.channels[this.i]?.id
 
-            await fetch(`/api/playout/config/${id}`, {
+            await authFetch<PlayoutConfigExt>(`/api/playout/config/${id}`, {
                 method: 'GET',
                 headers: authStore.authHeader,
             })
-                .then((resp) => resp.json())
                 .then((data: PlayoutConfigExt) => {
                     data.playlist.startInSec = timeToSeconds(data.playlist.day_start ?? 0)
                     data.playlist.lengthInSec = timeToSeconds(data.playlist.length ?? this.playlistLength)
@@ -139,11 +132,10 @@ export const useConfig = defineStore('config', {
             const indexStore = useIndex()
             const id = this.channels[this.i]?.id
 
-            await fetch(`/api/playout/outputs/${id}`, {
+            await authFetch<PlayoutOutput[]>(`/api/playout/outputs/${id}`, {
                 method: 'GET',
                 headers: authStore.authHeader,
             })
-                .then((resp) => resp.json())
                 .then((data: PlayoutOutput[]) => {
 
                     this.outputs = data
@@ -158,11 +150,10 @@ export const useConfig = defineStore('config', {
             const indexStore = useIndex()
             const id = this.channels[this.i]?.id
 
-            await fetch(`/api/playout/codecs/${id}`, {
+            await authFetch<PlayoutCodecOptions>(`/api/playout/codecs/${id}`, {
                 method: 'GET',
                 headers: authStore.authHeader,
             })
-                .then((resp) => resp.json())
                 .then((data: PlayoutCodecOptions) => {
                     this.outputCodecs = data
                 })
@@ -180,7 +171,7 @@ export const useConfig = defineStore('config', {
             this.playout.playlist.startInSec = timeToSeconds(obj.playlist.day_start)
             this.playout.playlist.lengthInSec = timeToSeconds(obj.playlist.length)
 
-            const update = await fetch(`/api/playout/config/${id}`, {
+            const update = await authFetch<{ requires_restart: boolean }>(`/api/playout/config/${id}`, {
                 method: 'PUT',
                 headers: { ...this.contentType, ...authStore.authHeader },
                 body: JSON.stringify(obj),
@@ -193,7 +184,7 @@ export const useConfig = defineStore('config', {
             const authStore = useAuth()
             const id = this.channels[this.i]?.id
 
-            return fetch(`/api/control/${id}/audio`, {
+            return authFetch<void>(`/api/control/${id}/audio`, {
                 method: 'PUT',
                 headers: { ...this.contentType, ...authStore.authHeader },
                 body: JSON.stringify({ volume }),
@@ -203,11 +194,10 @@ export const useConfig = defineStore('config', {
         async getUserConfig() {
             const authStore = useAuth()
 
-            await fetch('/api/user', {
+            await authFetch<User>('/api/user', {
                 method: 'GET',
                 headers: authStore.authHeader,
             })
-                .then((response) => response.json())
                 .then((data) => {
                     if (data.id === 0) {
                         this.logout()
@@ -222,7 +212,7 @@ export const useConfig = defineStore('config', {
         async setUserConfig(obj: any) {
             const authStore = useAuth()
 
-            const update = await fetch(`/api/user/${obj.id}`, {
+            const update = await authFetch<User>(`/api/user/${obj.id}`, {
                 method: 'PUT',
                 headers: { ...this.contentType, ...authStore.authHeader },
                 body: JSON.stringify(obj),
@@ -235,7 +225,7 @@ export const useConfig = defineStore('config', {
             const authStore = useAuth()
             delete user.confirm
 
-            const update = await fetch('/api/user', {
+            const update = await authFetch<User>('/api/user', {
                 method: 'Post',
                 headers: { ...this.contentType, ...authStore.authHeader },
                 body: JSON.stringify(user),
@@ -250,7 +240,7 @@ export const useConfig = defineStore('config', {
                 const indexStore = useIndex()
                 const id = this.channels[this.i]?.id
 
-                await fetch(`/api/control/${id}/process`, {
+                await authFetch(`/api/control/${id}/process`, {
                     method: 'POST',
                     headers: { ...this.contentType, ...authStore.authHeader },
                     body: JSON.stringify({ command: 'restart' }),

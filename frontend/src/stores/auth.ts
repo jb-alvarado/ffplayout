@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { jwtDecode } from 'jwt-decode'
+import { authFetch } from '@/composables/authFetch'
 import { useIndex } from '@/stores/index'
 
 type LoginResult = {
@@ -7,7 +8,62 @@ type LoginResult = {
     verificationRequired: boolean
 }
 
+type AuthChannelMessage =
+    | { type: 'tokens-updated'; access: string; refresh: string }
+    | { type: 'logout' }
+
+const AUTH_CHANNEL_NAME = 'ffplayout-auth'
+
 let refreshRequest: Promise<boolean> | null = null
+let authChannel: BroadcastChannel | null = null
+
+function broadcastAuthMessage(message: AuthChannelMessage) {
+    authChannel?.postMessage(message)
+}
+
+function isAuthChannelMessage(message: unknown): message is AuthChannelMessage {
+    if (!message || typeof message !== 'object' || !('type' in message)) {
+        return false
+    }
+
+    if (message.type === 'logout') {
+        return true
+    }
+
+    return (
+        message.type === 'tokens-updated' &&
+        'access' in message &&
+        typeof message.access === 'string' &&
+        'refresh' in message &&
+        typeof message.refresh === 'string'
+    )
+}
+
+/** Starts tab-to-tab synchronization after Pinia has been installed. */
+export function initAuthChannel() {
+    if (authChannel || typeof BroadcastChannel === 'undefined') {
+        return
+    }
+
+    authChannel = new BroadcastChannel(AUTH_CHANNEL_NAME)
+    authChannel.addEventListener('message', (event: MessageEvent<unknown>) => {
+        if (!isAuthChannelMessage(event.data)) {
+            return
+        }
+
+        const auth = useAuth()
+        if (event.data.type === 'logout') {
+            auth.removeToken(false)
+            return
+        }
+
+        try {
+            auth.updateToken(event.data.access, event.data.refresh, false)
+        } catch {
+            auth.removeToken(false)
+        }
+    })
+}
 
 export const useAuth = defineStore('auth', {
     state: () => ({
@@ -24,7 +80,7 @@ export const useAuth = defineStore('auth', {
 
     getters: {},
     actions: {
-        updateToken(token: string, refresh: string) {
+        updateToken(token: string, refresh: string, broadcast: boolean = true) {
             const decodedToken = jwtDecode<JwtPayloadExt>(token)
             const decodedRefresh = jwtDecode<JwtPayloadExt>(refresh)
             if (decodedToken.token_type !== 'access' || decodedRefresh.token_type !== 'refresh') {
@@ -41,9 +97,13 @@ export const useAuth = defineStore('auth', {
             this.authHeader = { Authorization: `Bearer ${token}` }
             this.id = decodedToken.id
             this.role = decodedToken.role
+
+            if (broadcast) {
+                broadcastAuthMessage({ type: 'tokens-updated', access: token, refresh })
+            }
         },
 
-        removeToken() {
+        removeToken(broadcast: boolean = true) {
             localStorage.removeItem('token')
             localStorage.removeItem('refresh')
 
@@ -54,6 +114,10 @@ export const useAuth = defineStore('auth', {
             this.id = 0
             this.role = ''
             this.uuid = null
+
+            if (broadcast) {
+                broadcastAuthMessage({ type: 'logout' })
+            }
         },
 
         async logout() {
@@ -77,7 +141,7 @@ export const useAuth = defineStore('auth', {
         beginVerification() {
             // A previous session must not redirect the pending two-factor
             // login to the authenticated part of the application.
-            this.removeToken()
+            this.removeToken(false)
             this.verificationPending = true
         },
 
@@ -225,20 +289,7 @@ export const useAuth = defineStore('auth', {
 
         async selectAuthUser() {
             const store = useIndex()
-            await fetch(`/api/user/${this.id}`, {
-                headers: this.authHeader,
-            })
-                .then(async (resp) => {
-                    if (resp.status >= 400) {
-                        const msg = (await resp.json())?.error ?? (await resp.text())
-
-                        if (msg.includes('Unauthorized')) {
-                            this.removeToken()
-                        }
-                        throw new Error(msg)
-                    }
-                    return resp.json()
-                })
+            await authFetch<User>(`/api/user/${this.id}`)
                 .then((response: any) => {
                     if (response) {
                         this.id = response.id
@@ -251,20 +302,7 @@ export const useAuth = defineStore('auth', {
         },
 
         async obtainUuid() {
-            await fetch('/api/generate-uuid', {
-                method: 'POST',
-                headers: this.authHeader,
-            })
-                .then(async (resp) => {
-                    if (!resp.ok) {
-                        if (resp.status === 401) {
-                            this.removeToken()
-                        }
-                        this.uuid = null
-                    }
-
-                    return resp.json()
-                })
+            await authFetch<{ uuid: string }>('/api/generate-uuid', { method: 'POST' })
                 .then((response: any) => {
                     this.uuid = response.uuid
                 })

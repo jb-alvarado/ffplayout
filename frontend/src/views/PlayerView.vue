@@ -38,6 +38,7 @@ import VideoPlayer from '@/components/utils/VideoPlayer.vue'
 import TimePicker from '@/components/utils/TimePicker.vue'
 import SvgIcon from '@/components/utils/SvgIcon.vue'
 
+import { authFetch } from '@/composables/authFetch'
 import { stringFormatter, playlistOperations } from '@/composables/helper'
 import { createFilePreviewUrl } from '@/composables/fileAccess'
 import { useAuth } from '@/stores/auth'
@@ -166,7 +167,6 @@ async function setPreviewData(path: string) {
             previewUrl.value = await createFilePreviewUrl(
                 configStore.channels[configStore.i]?.id,
                 fullPath,
-                authStore.authHeader
             )
         }
         catch (error) {
@@ -335,7 +335,7 @@ async function importPlaylist(imp: boolean) {
         formData.append(textFile.value[0].name, textFile.value[0])
 
         playlistStore.isLoading = true
-        await fetch(
+        await authFetch<any>(
             `/api/file/${configStore.channels[configStore.i]?.id}/import?file=${textFile.value[0].name}&date=${
                 listDate.value
             }`,
@@ -345,13 +345,6 @@ async function importPlaylist(imp: boolean) {
                 body: formData,
             },
         )
-            .then(async (response) => {
-                if (response.status > 203) {
-                    throw new Error(await response.text())
-                }
-
-                return response.json()
-            })
             .then(async (response) => {
                 indexStore.msgAlert('success', response, 2)
                 await playlistStore.getPlaylist(listDate.value)
@@ -375,7 +368,7 @@ async function savePlaylist(save: boolean) {
 
         const saveList = processPlaylist(listDate.value, cloneDeep(playlistStore.playlist), true)
 
-        await fetch(`/api/playlist/${configStore.channels[configStore.i]?.id}`, {
+        await authFetch<any>(`/api/playlist/${configStore.channels[configStore.i]?.id}`, {
             method: 'POST',
             headers: { ...configStore.contentType, ...authStore.authHeader },
             body: JSON.stringify({
@@ -384,13 +377,6 @@ async function savePlaylist(save: boolean) {
                 program: saveList,
             }),
         })
-            .then(async (response) => {
-                if (!response.ok) {
-                    throw new Error(await response.text())
-                }
-
-                return response.json()
-            })
             .then((response: any) => {
                 indexStore.msgAlert('success', response, 2)
             })
@@ -408,7 +394,7 @@ async function deletePlaylist(del: boolean) {
     showDeleteModal.value = false
 
     if (del) {
-        await fetch(`/api/playlist/${configStore.channels[configStore.i]?.id}/${listDate.value}`, {
+        await authFetch(`/api/playlist/${configStore.channels[configStore.i]?.id}/${listDate.value}`, {
             method: 'DELETE',
             headers: { ...configStore.contentType, ...authStore.authHeader },
         }).then(() => {

@@ -7,6 +7,7 @@ import timezone from 'dayjs/plugin/timezone.js'
 
 import { defineStore } from 'pinia'
 
+import { authFetch } from '@/composables/authFetch'
 import { i18n } from '@/i18n'
 import { playlistOperations } from '@/composables/helper'
 import { useAuth } from '@/stores/auth'
@@ -44,17 +45,10 @@ export const usePlaylist = defineStore('playlist', {
             const indexStore = useIndex()
             const channel = configStore.channels[configStore.i]?.id
 
-            await fetch(`/api/playlist/${channel}?date=${date}`, {
+            await authFetch<Playlist>(`/api/playlist/${channel}?date=${date}`, {
                 method: 'GET',
                 headers: authStore.authHeader,
             })
-                .then(async (response) => {
-                    if (!response.ok) {
-                        throw new Error(await response.text())
-                    }
-
-                    return response.json()
-                })
                 .then((data: Playlist) => {
                     if (data.program) {
                         const programData = processPlaylist(date, data.program, false)

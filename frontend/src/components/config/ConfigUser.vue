@@ -2,6 +2,7 @@
 import { ref, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 
+import { authFetch } from '@/composables/authFetch'
 import { useVariables } from '@/composables/variables'
 import { useAuth } from '@/stores/auth'
 import { useIndex } from '@/stores/index'
@@ -42,11 +43,10 @@ onMounted(() => {
 })
 
 async function getUsers() {
-    fetch('/api/users', {
+    authFetch<User[]>('/api/users', {
         method: 'GET',
         headers: authStore.authHeader,
     })
-        .then((response) => response.json())
         .then((data) => {
             users.value = data
 
@@ -62,11 +62,10 @@ function onChange(event: Event) {
 }
 
 async function getUserConfig() {
-    await fetch(`/api/user/${selected.value}`, {
+    await authFetch<User>(`/api/user/${selected.value}`, {
         method: 'GET',
         headers: authStore.authHeader,
     })
-        .then((response) => response.json())
         .then((data) => {
             configStore.configUser = data
         })
@@ -76,7 +75,7 @@ async function deleteUser() {
     if (configStore.configUser.id === configStore.currentUser) {
         indexStore.msgAlert('error', t('user.deleteNotPossible'), 2)
     } else {
-        await fetch(`/api/user/${configStore.configUser.id}`, {
+        await authFetch(`/api/user/${configStore.configUser.id}`, {
             method: 'DELETE',
             headers: authStore.authHeader,
         })
@@ -116,15 +115,14 @@ async function addUser(add: boolean) {
 
         if (user.value.username && user.value.password && user.value.password === user.value.confirm) {
             await authStore.inspectToken()
-            const update = await configStore.addNewUser(user.value)
-            showUserModal.value = false
+            try {
+                await configStore.addNewUser(user.value)
+                showUserModal.value = false
 
-            if (update.status === 200) {
                 indexStore.msgAlert('success', t('user.addSuccess'), 2)
-
                 await getUsers()
                 await getUserConfig()
-            } else {
+            } catch {
                 indexStore.msgAlert('error', t('user.addFailed'), 3)
             }
 
@@ -149,11 +147,10 @@ async function onSubmitUser() {
     }
 
     await authStore.inspectToken()
-    const update = await configStore.setUserConfig(configStore.configUser)
-
-    if (update.status === 200) {
+    try {
+        await configStore.setUserConfig(configStore.configUser)
         indexStore.msgAlert('success', t('user.updateSuccess'), 2)
-    } else {
+    } catch {
         indexStore.msgAlert('error', t('user.updateFailed'), 2)
     }
 

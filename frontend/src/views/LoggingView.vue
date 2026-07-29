@@ -23,6 +23,7 @@ dayjs.extend(LocalizedFormat)
 dayjs.extend(timezone)
 dayjs.extend(utc)
 
+import { authFetch, authFetchRaw } from '@/composables/authFetch'
 import { useAuth } from '@/stores/auth'
 import { useConfig } from '@/stores/config'
 import { useIndex } from '@/stores/index'
@@ -104,21 +105,16 @@ async function getLog() {
         date = ''
     }
 
-    await fetch(
+    await authFetch<string>(
         `/api/log/${configStore.channels[configStore.i]?.id}?date=${date}&timezone=${encodeURIComponent(
             configStore.timezone
         )}`,
         {
             method: 'GET',
             headers: authStore.authHeader,
+            responseType: 'text',
         }
     )
-        .then(async (response) => {
-            if (!response.ok) {
-                throw new Error(await response.text())
-            }
-            return response.text()
-        })
         .then((data) => {
             currentLog.value = data
 
@@ -139,7 +135,7 @@ async function downloadLog() {
         date = ''
     }
 
-    const response = await fetch(
+    const response = await authFetchRaw(
         `/api/log/${id}?date=${date}&timezone=${encodeURIComponent(configStore.timezone)}&download=true`,
         {
             method: 'GET',

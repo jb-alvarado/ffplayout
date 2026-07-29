@@ -16,6 +16,7 @@ import { useMedia } from '@/stores/media'
 import GenericModal from '@/components/utils/GenericModal.vue'
 import VideoPlayer from '@/components/utils/VideoPlayer.vue'
 
+import { authFetch } from '@/composables/authFetch'
 import { stringFormatter } from '@/composables/helper'
 import { createFilePreviewUrl } from '@/composables/fileAccess'
 import { useFileUpload } from '@/composables/useFileUpload'
@@ -144,17 +145,13 @@ async function handleDrop(event: any, targetFolder: any, isParent: boolean | nul
     }
 
     if (source !== target) {
-        await fetch(`/api/file/${configStore.channels[configStore.i]?.id}/rename`, {
+        await authFetch<void>(`/api/file/${configStore.channels[configStore.i]?.id}/rename`, {
             method: 'POST',
             headers: { ...configStore.contentType, ...authStore.authHeader },
             body: JSON.stringify({ source, target }),
         })
-            .then(async (res) => {
-                if (res.status >= 400) {
-                    indexStore.msgAlert('error', await res.json(), 3)
-                } else {
-                    mediaStore.getTree(mediaStore.folderTree.source)
-                }
+            .then(() => {
+                mediaStore.getTree(mediaStore.folderTree.source)
             })
             .catch((e) => {
                 indexStore.msgAlert('error', `${t('media.moveError')}: ${e}`, 3)
@@ -177,7 +174,6 @@ async function setPreviewData(path: string) {
         previewUrl.value = await createFilePreviewUrl(
             configStore.channels[configStore.i]?.id,
             fullPath,
-            authStore.authHeader
         )
     }
     catch (error) {
@@ -220,15 +216,12 @@ async function deleteFileOrFolder(del: boolean) {
     showDeleteModal.value = false
 
     if (del) {
-        await fetch(`/api/file/${configStore.channels[configStore.i]?.id}/remove`, {
+        await authFetch<void>(`/api/file/${configStore.channels[configStore.i]?.id}/remove`, {
             method: 'POST',
             headers: { ...configStore.contentType, ...authStore.authHeader },
             body: JSON.stringify({ source: deleteName.value, recursive: recursive.value }),
         })
-            .then(async (response) => {
-                if (response.status !== 200) {
-                    indexStore.msgAlert('error', `${await response.text()}`, 5)
-                }
+            .then(() => {
                 mediaStore.getTree(mediaStore.folderTree.source)
             })
             .catch((e) => {
@@ -256,7 +249,7 @@ async function renameFile(ren: boolean) {
     showRenameModal.value = false
 
     if (ren && renameOldName.value !== renameNewName.value) {
-        await fetch(`/api/file/${configStore.channels[configStore.i]?.id}/rename`, {
+        await authFetch<void>(`/api/file/${configStore.channels[configStore.i]?.id}/rename`, {
             method: 'POST',
             headers: { ...configStore.contentType, ...authStore.authHeader },
             body: JSON.stringify({
@@ -264,12 +257,8 @@ async function renameFile(ren: boolean) {
                 target: `${renameOldPath.value}${renameNewName.value}`,
             }),
         })
-            .then(async (res) => {
-                if (res.status >= 400) {
-                    indexStore.msgAlert('error', await res.text(), 3)
-                } else {
-                    mediaStore.getTree(mediaStore.folderTree.source)
-                }
+            .then(() => {
+                mediaStore.getTree(mediaStore.folderTree.source)
             })
             .catch((e) => {
                 indexStore.msgAlert('error', `${t('media.moveError')}: ${e}`, 3)
@@ -299,7 +288,7 @@ async function createFolder(create: boolean) {
             return
         }
 
-        await fetch(`/api/file/${configStore.channels[configStore.i]?.id}/create-folder`, {
+        await authFetch(`/api/file/${configStore.channels[configStore.i]?.id}/create-folder`, {
             method: 'POST',
             headers: { ...configStore.contentType, ...authStore.authHeader },
             body: JSON.stringify({ source: path }),
