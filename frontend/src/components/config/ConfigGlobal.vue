@@ -4,6 +4,7 @@ import { cloneDeep } from 'es-toolkit/object'
 import { isEqual } from 'es-toolkit/predicate'
 import { useI18n } from 'vue-i18n'
 
+import { authFetch } from '@/composables/authFetch'
 import { useAuth } from '@/stores/auth'
 import { useConfig } from '@/stores/config'
 import { useIndex } from '@/stores/index'
@@ -24,15 +25,9 @@ async function getSettings() {
     loading.value = true
 
     try {
-        const response = await fetch('/api/global', {
+        settings.value = await authFetch<GlobalSettings>('/api/global', {
             headers: authStore.authHeader,
         })
-
-        if (!response.ok) {
-            throw new Error(await response.text())
-        }
-
-        settings.value = await response.json()
         savedSettings.value = cloneDeep(settings.value)
         smtpPassword.value = ''
     } catch {
@@ -48,7 +43,7 @@ function isChanged() {
 
 async function save() {
     try {
-        const response = await fetch('/api/global', {
+        settings.value = await authFetch<GlobalSettings>('/api/global', {
             method: 'PUT',
             headers: { ...configStore.contentType, ...authStore.authHeader },
             body: JSON.stringify({
@@ -60,11 +55,6 @@ async function save() {
             }),
         })
 
-        if (!response.ok) {
-            throw new Error(await response.text())
-        }
-
-        settings.value = await response.json()
         savedSettings.value = cloneDeep(settings.value)
         smtpPassword.value = ''
         indexStore.msgAlert('success', t('config.updateGlobalSuccess'), 2)

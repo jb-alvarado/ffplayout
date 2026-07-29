@@ -6,6 +6,7 @@ import { useHead } from '@unhead/vue'
 
 import GenericModal from '@/components/utils/GenericModal.vue'
 
+import { authFetch } from '@/composables/authFetch'
 import { useAuth } from '@/stores/auth'
 import { useIndex } from '@/stores/index'
 import { useConfig } from '@/stores/config'
@@ -72,11 +73,10 @@ watch([i], () => {
 })
 
 async function getPreset(index: number) {
-    fetch(`/api/presets/${configStore.channels[configStore.i]?.id}`, {
+    authFetch<TextPreset[]>(`/api/presets/${configStore.channels[configStore.i]?.id}`, {
         method: 'GET',
         headers: authStore.authHeader,
     })
-        .then((response) => response.json())
         .then((data) => {
             if (index === -1) {
                 presets.value = [{ value: -1, name: '' }]
@@ -94,11 +94,11 @@ async function getPreset(index: number) {
 }
 
 async function getFontFamilies() {
-    const response = await fetch('/api/text/fonts', {
+    const response = await authFetch<string[]>('/api/text/fonts', {
         method: 'GET',
         headers: authStore.authHeader,
     })
-    fontFamilies.value = response.ok ? await response.json() : []
+    fontFamilies.value = response
 }
 
 function onChange(event: any) {
@@ -109,15 +109,15 @@ function onChange(event: any) {
 
 async function savePreset() {
     if (selected.value) {
-        const response = await fetch(`/api/presets/${configStore.channels[configStore.i]?.id}/${form.value.id}`, {
-            method: 'PUT',
-            headers: { ...configStore.contentType, ...authStore.authHeader },
-            body: JSON.stringify(form.value),
-        })
+        try {
+            await authFetch<TextPreset>(`/api/presets/${configStore.channels[configStore.i]?.id}/${form.value.id}`, {
+                method: 'PUT',
+                headers: { ...configStore.contentType, ...authStore.authHeader },
+                body: JSON.stringify(form.value),
+            })
 
-        if (response.status === 200) {
             indexStore.msgAlert('success', t('message.saveDone'), 2)
-        } else {
+        } catch {
             indexStore.msgAlert('error', t('message.saveFailed'), 2)
         }
     }
@@ -133,16 +133,16 @@ async function createNewPreset(create: boolean) {
             channel_id: configStore.channels[configStore.i]?.id,
         }
 
-        const response = await fetch(`/api/presets/${configStore.channels[configStore.i]?.id}/`, {
-            method: 'POST',
-            headers: { ...configStore.contentType, ...authStore.authHeader },
-            body: JSON.stringify(preset),
-        })
+        try {
+            await authFetch<TextPreset>(`/api/presets/${configStore.channels[configStore.i]?.id}/`, {
+                method: 'POST',
+                headers: { ...configStore.contentType, ...authStore.authHeader },
+                body: JSON.stringify(preset),
+            })
 
-        if (response.status === 200) {
             indexStore.msgAlert('success', t('message.saveDone'), 2)
             getPreset(-1)
-        } else {
+        } catch {
             indexStore.msgAlert('error', t('message.saveFailed'), 2)
         }
     }
@@ -154,7 +154,7 @@ async function deletePreset(del: boolean) {
     showDeleteModal.value = false
 
     if (del && selected.value && selected.value !== '') {
-        await fetch(`/api/presets/${configStore.channels[configStore.i]?.id}/${form.value.id}`, {
+        await authFetch(`/api/presets/${configStore.channels[configStore.i]?.id}/${form.value.id}`, {
             method: 'DELETE',
             headers: authStore.authHeader,
         })
@@ -164,15 +164,15 @@ async function deletePreset(del: boolean) {
 }
 
 async function submitMessage() {
-    const response = await fetch(`/api/control/${configStore.channels[configStore.i]?.id}/text`, {
-        method: 'POST',
-        headers: { ...configStore.contentType, ...authStore.authHeader },
-        body: JSON.stringify(form.value),
-    })
+    try {
+        await authFetch<void>(`/api/control/${configStore.channels[configStore.i]?.id}/text`, {
+            method: 'POST',
+            headers: { ...configStore.contentType, ...authStore.authHeader },
+            body: JSON.stringify(form.value),
+        })
 
-    if (response.status === 200) {
         indexStore.msgAlert('success', t('message.sendDone'), 2)
-    } else {
+    } catch {
         indexStore.msgAlert('error', t('message.sendFailed'), 2)
     }
 }

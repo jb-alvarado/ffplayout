@@ -1,5 +1,6 @@
 import { ref } from 'vue'
 
+import { authFetch, authFetchRaw } from '@/composables/authFetch'
 import { useHelper } from '@/composables/helper'
 
 interface UploadRequestOptions {
@@ -91,16 +92,9 @@ export const useFileUpload = () => {
         url.searchParams.set('size', file.size.toString())
         url.searchParams.set('batch_id', batchId)
 
-        const response = await fetch(url, {
+        return authFetch<{ received_ranges: [number, number][] }>(url, {
             headers: request.headers,
         })
-        if (!response.ok) {
-            throw new Error(await errMsg(response))
-        }
-
-        return (await response.json()) as {
-            received_ranges: [number, number][]
-        }
     }
 
     async function parseResponse<T>(resp: Response, responseType: 'json' | 'text' = 'text'): Promise<T> {
@@ -164,7 +158,7 @@ export const useFileUpload = () => {
                     }
                 }
 
-                const resp = await fetch(request.url, {
+                const resp = await authFetchRaw(request.url, {
                     method: request.method || 'PUT',
                     headers: request.headers,
                     body: form,

@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 
 import GenericModal from '@/components/utils/GenericModal.vue'
 
+import { authFetch } from '@/composables/authFetch'
 import { useAuth } from '@/stores/auth'
 import { useIndex } from '@/stores/index'
 import { useConfig } from '@/stores/config'
@@ -229,29 +230,17 @@ async function onSubmitPlayout() {
     try {
         const update = await configStore.setPlayoutConfig(configStore.playout)
         configStore.onetimeInfo = true
-
-        if (!update.ok) {
-            const message = await update.text()
-            const summary = t('config.updatePlayoutFailed')
-            indexStore.msgAlert('error', message ? `${summary}: ${message}` : summary, 3)
-            return
-        }
-
-        const { requires_restart: requiresRestart } = (await update.json()) as { requires_restart: boolean }
+        const { requires_restart: requiresRestart } = update
 
         indexStore.msgAlert('success', t('config.updatePlayoutSuccess'), 2)
 
         const id = configStore.channels[configStore.i]?.id
-        const response = await fetch(`/api/control/${id}/process`, {
+        const response = await authFetch<string>(`/api/control/${id}/process`, {
             method: 'POST',
             headers: { ...configStore.contentType, ...authStore.authHeader },
             body: JSON.stringify({ command: 'status' }),
         })
-        if (!response.ok) {
-            throw new Error(await response.text())
-        }
-
-        if ((await response.json()) === 'active' && requiresRestart) {
+        if (response === 'active' && requiresRestart) {
             configStore.showRestartModal = true
         }
 

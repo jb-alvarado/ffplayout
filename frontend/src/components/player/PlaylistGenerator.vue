@@ -7,6 +7,7 @@ import { useI18n } from 'vue-i18n'
 import { useWindowSize } from '@vueuse/core'
 import { isEqual } from 'es-toolkit/predicate'
 
+import { authFetch } from '@/composables/authFetch'
 import { playlistOperations } from '@/composables/helper'
 import { useAuth } from '@/stores/auth'
 import { useIndex } from '@/stores/index'
@@ -140,18 +141,11 @@ async function generatePlaylist() {
         }
     }
 
-    await fetch(`/api/playlist/${configStore.channels[configStore.i]?.id}/generate/${playlistStore.listDate}`, {
+    await authFetch<any>(`/api/playlist/${configStore.channels[configStore.i]?.id}/generate/${playlistStore.listDate}`, {
         method: 'POST',
         headers: { ...configStore.contentType, ...authStore.authHeader },
         body: JSON.stringify(body),
     })
-        .then(async (response) => {
-            if (!response.ok) {
-                throw new Error(await response.text())
-            }
-
-            return response.json()
-        })
         .then((response: any) => {
             playlistStore.playlist = processPlaylist(playlistStore.listDate, response.program, false)
             indexStore.msgAlert('success', t('player.generateDone'), 2)

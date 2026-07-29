@@ -12,6 +12,7 @@ import { throttle } from 'es-toolkit/function'
 import { storeToRefs } from 'pinia'
 import { useEventSource, useElementSize } from '@vueuse/core'
 
+import { authFetch } from '@/composables/authFetch'
 import { stringFormatter } from '@/composables/helper'
 import { useAuth } from '@/stores/auth'
 import { useIndex } from '@/stores/index'
@@ -250,11 +251,7 @@ const applyVolumeControl = throttle(async () => {
     configStore.playout.audio.volume = volume
 
     try {
-        const response = await configStore.applyAudioEffects(volume)
-
-        if (!response.ok) {
-            throw new Error(await response.text())
-        }
+        await configStore.applyAudioEffects(volume)
     } catch (error) {
         indexStore.msgAlert('error', error instanceof Error ? error.message : String(error), 3)
     }
@@ -291,7 +288,7 @@ const controlProcess = throttle(async (state: string) => {
         Control playout (start, stop, restart)
     */
     const id = configStore.channels[configStore.i]?.id
-    await fetch(`/api/control/${id}/process`, {
+    await authFetch(`/api/control/${id}/process`, {
         method: 'POST',
         headers: { ...configStore.contentType, ...authStore.authHeader },
         body: JSON.stringify({ command: state }),
@@ -315,7 +312,7 @@ const controlPlayout = throttle(async (state: string) => {
     */
     const id = configStore.channels[configStore.i]?.id
 
-    await fetch(`/api/control/${id}/playout`, {
+    await authFetch(`/api/control/${id}/playout`, {
         method: 'POST',
         headers: { ...configStore.contentType, ...authStore.authHeader },
         body: JSON.stringify({ control: state }),

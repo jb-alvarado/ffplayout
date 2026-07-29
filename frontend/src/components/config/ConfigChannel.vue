@@ -10,6 +10,7 @@ import { cloneDeep } from 'es-toolkit/object'
 import GenericModal from '@/components/utils/GenericModal.vue'
 import SvgIcon from '@/components/utils/SvgIcon.vue'
 
+import { authFetch } from '@/composables/authFetch'
 import { useAuth } from '@/stores/auth'
 import { useIndex } from '@/stores/index'
 import { useConfig } from '@/stores/config'
@@ -64,18 +65,11 @@ function newChannel() {
 }
 
 async function addNewChannel() {
-    await fetch('/api/channel', {
+    await authFetch<Channel>('/api/channel', {
         method: 'POST',
         headers: { ...configStore.contentType, ...authStore.authHeader },
         body: JSON.stringify(channel.value),
     })
-        .then(async (response) => {
-            if (!response.ok) {
-                throw new Error(await response.text())
-            }
-
-            return response.json()
-        })
         .then((chl) => {
             configStore.channels.push(cloneDeep(chl as Channel))
             configStore.channelsRaw.push(chl as Channel)
@@ -92,7 +86,7 @@ async function addNewChannel() {
 }
 
 async function updateChannel() {
-    await fetch(`/api/channel/${channel.value.id}`, {
+    await authFetch(`/api/channel/${channel.value.id}`, {
         method: 'PATCH',
         headers: { ...configStore.contentType, ...authStore.authHeader },
         body: JSON.stringify(channel.value),
@@ -161,10 +155,15 @@ async function deleteChannel() {
         return
     }
 
-    const response = await fetch(`/api/channel/${channel.value.id}`, {
-        method: 'DELETE',
-        headers: authStore.authHeader,
-    })
+    try {
+        await authFetch(`/api/channel/${channel.value.id}`, {
+            method: 'DELETE',
+            headers: authStore.authHeader,
+        })
+    } catch {
+        indexStore.msgAlert('error', t('config.deleteChannelFailed'), 2)
+        return
+    }
 
     await configStore.getChannelConfig()
     const previousChannel = configStore.channels[Math.max(0, i.value - 1)]
@@ -179,11 +178,7 @@ async function deleteChannel() {
         await router.replace({ path: route.path, query: { ...route.query, channel: selectedChannel } })
     }
 
-    if (response.status === 200) {
-        indexStore.msgAlert('success', t('config.deleteChannelSuccess'), 2)
-    } else {
-        indexStore.msgAlert('error', t('config.deleteChannelFailed'), 2)
-    }
+    indexStore.msgAlert('success', t('config.deleteChannelSuccess'), 2)
 }
 </script>
 <template>

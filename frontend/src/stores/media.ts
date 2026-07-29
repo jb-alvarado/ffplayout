@@ -1,9 +1,10 @@
 import { defineStore } from 'pinia'
 
-import { useAuth } from './auth'
-import { useIndex } from './index'
-import { useConfig } from './config'
+import { authFetch } from '@/composables/authFetch'
 import { i18n } from '@/i18n'
+import { useAuth } from './auth'
+import { useConfig } from './config'
+import { useIndex } from './index'
 
 import { playlistOperations } from '../composables/helper'
 
@@ -33,25 +34,11 @@ export const useMedia = defineStore('media', {
             const crumbs: Crumb[] = []
             let root = '/'
 
-            await fetch(`/api/file/${id}/browse`, {
+            await authFetch<any>(`/api/file/${id}/browse`, {
                 method: 'POST',
                 headers: { ...configStore.contentType, ...authStore.authHeader },
                 body: JSON.stringify({ source: path, folders_only: foldersOnly }),
             })
-                .then((response) => {
-                    if (response.status === 200) {
-                        return response.json()
-                    } else {
-                        indexStore.msgAlert('error', i18n.t('media.notExists'), 3)
-
-                        return {
-                            source: '',
-                            parent: '',
-                            folders: [],
-                            files: [],
-                        }
-                    }
-                })
                 .then((data) => {
                     const pathStr = `${data.parent}/` + data.source
                     const pathArr = pathStr.split('/')
@@ -81,6 +68,9 @@ export const useMedia = defineStore('media', {
                         data.folders = data.folders.map((i: any) => ({ uid: genUID(), name: i }))
                         this.folderTree = data
                     }
+                })
+                .catch(() => {
+                    indexStore.msgAlert('error', i18n.t('media.notExists'), 3)
                 })
 
             this.isLoading = false

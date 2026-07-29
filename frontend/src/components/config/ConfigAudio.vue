@@ -54,9 +54,10 @@ function meterValue(value: number | null | undefined, unit: string) {
 }
 
 async function saveAudio() {
-    const response = await configStore.setPlayoutConfig(configStore.playout)
-    if (!response.ok) {
-        indexStore.msgAlert('error', await response.text(), 3)
+    try {
+        await configStore.setPlayoutConfig(configStore.playout)
+    } catch (error) {
+        indexStore.msgAlert('error', error instanceof Error ? error.message : String(error), 3)
         return
     }
 
