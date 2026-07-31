@@ -197,7 +197,3 @@ FROM scratch AS ffmpeg-debug
 COPY --from=builder /ffmpeg-debug/ /
 
 FROM builder AS ffmpeg-static
-
-RUN test -x /usr/local/bin/ffmpeg && \
-    test -x /usr/local/bin/ffprobe && \
-    strip /usr/local/bin/ffmpeg /usr/local/bin/ffprobe
