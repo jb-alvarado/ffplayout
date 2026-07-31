@@ -56,7 +56,7 @@ flexi_logger = { version = "0.31", features = ["async", "colors", "kv"] }
 iana-time-zone = "0.1"
 include_dir = "0.7"
 inquire = "0.9"
-jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto"] }
+jsonwebtoken = { version = "11", default-features = false, features = ["rust_crypto"] }
 lazy-limit = "1"
 lettre = { version = "0.11", features = [
     "builder",

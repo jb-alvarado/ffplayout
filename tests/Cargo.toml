@@ -18,7 +18,7 @@ ffplayout = { path = "../backend/app", default-features = false, features = [
 axum = "0.8"
 chrono = "0.4"
 serde_json = "1.0"
-serial_test = "3.0"
+serial_test = "4.0"
 sqlx = { version = "0.9", features = ["runtime-tokio", "sqlite"] }
 tokio = { version = "1.29", features = ["full"] }
 tokio-util = "0.7"
