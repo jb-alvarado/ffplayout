@@ -215,7 +215,7 @@ fn surface_config(
         .formats
         .iter()
         .copied()
-        .find(wgpu::TextureFormat::is_srgb)
+        .find(|format| is_srgb_surface_format(*format))
         .or_else(|| capabilities.formats.first().copied())
         .ok_or_else(|| anyhow!("WGPU adapter does not support the desktop surface"))?;
     Ok(wgpu::SurfaceConfiguration {
@@ -229,6 +229,14 @@ fn surface_config(
         color_space: wgpu::SurfaceColorSpace::Auto,
         view_formats: Vec::new(),
     })
+}
+
+#[cfg(feature = "desktop-gpu")]
+fn is_srgb_surface_format(format: wgpu::TextureFormat) -> bool {
+    matches!(
+        format,
+        wgpu::TextureFormat::Rgba8UnormSrgb | wgpu::TextureFormat::Bgra8UnormSrgb
+    )
 }
 
 #[cfg(feature = "desktop-gpu")]
@@ -354,7 +362,7 @@ impl GpuYuvRenderer {
             layout,
             parameters,
             parameter_values: [0.0; YUV_PARAMETER_COUNT],
-            output_is_srgb: surface_format.is_srgb(),
+            output_is_srgb: is_srgb_surface_format(surface_format),
             textures: None,
             last_pts: None,
             last_y_plane: None,
@@ -911,7 +919,7 @@ impl GpuSpriteRenderer {
             pipeline,
             layout,
             sampler,
-            output_is_srgb: surface_format.is_srgb(),
+            output_is_srgb: is_srgb_surface_format(surface_format),
             logo: None,
             subtitle: None,
             volume: None,

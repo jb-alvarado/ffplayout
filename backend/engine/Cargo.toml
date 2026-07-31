@@ -47,22 +47,22 @@ tokio = { version = "1.44", optional = true, features = ["rt", "sync"] }
 winit = { version = "0.30", optional = true }
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "dragonfly", target_os = "netbsd", target_os = "openbsd"))'.dependencies]
-wgpu = { version = "30", optional = true, default-features = false, features = ["std", "parking_lot", "vulkan", "gles", "wgsl"] }
+wgpu = { git = "https://github.com/gfx-rs/wgpu.git", branch = "v30", optional = true, default-features = false, features = ["std", "parking_lot", "vulkan", "gles", "wgsl"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-wgpu = { version = "30", optional = true, default-features = false, features = ["std", "parking_lot", "dx12", "gles", "wgsl"] }
+wgpu = { git = "https://github.com/gfx-rs/wgpu.git", branch = "v30", optional = true, default-features = false, features = ["std", "parking_lot", "dx12", "gles", "wgsl"] }
 
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
-wgpu = { version = "30", optional = true, default-features = false, features = ["std", "parking_lot", "metal", "wgsl"] }
+wgpu = { git = "https://github.com/gfx-rs/wgpu.git", branch = "v30", optional = true, default-features = false, features = ["std", "parking_lot", "metal", "wgsl"] }
 
 [target.'cfg(target_os = "android")'.dependencies]
-wgpu = { version = "30", optional = true, default-features = false, features = ["std", "parking_lot", "gles", "wgsl"] }
+wgpu = { git = "https://github.com/gfx-rs/wgpu.git", branch = "v30", optional = true, default-features = false, features = ["std", "parking_lot", "gles", "wgsl"] }
 
 [dev-dependencies]
 clap = { version = "4", features = ["derive"] }
 env_logger = "0.11"
 glob = "0.3"
-naga = { version = "30", features = ["wgsl-in"] }
+naga = { git = "https://github.com/gfx-rs/wgpu.git", branch = "v30", features = ["wgsl-in"] }
 
 [[example]]
 name = "wav_cpal"
