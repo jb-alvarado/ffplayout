@@ -3,7 +3,7 @@ use std::any::type_name;
 use rten_simd::{
     Isa, Simd, SimdOp,
     isa::GenericIsa,
-    ops::{Extend, IntOps, NarrowSaturate, NumOps},
+    ops::{BitOps, Extend, IntOps, NarrowSaturate, NumOps},
 };
 
 pub(crate) struct Plane<'a> {
@@ -83,7 +83,7 @@ impl SimdOp for BlendPlane<'_> {
             };
 
             if generic_fallback {
-                // rten-simd 0.24's GenericIsa narrowing indexes beyond its
+                // rten-simd 0.25's GenericIsa narrowing indexes beyond its
                 // source vectors, so unsupported CPUs use the scalar fallback.
                 blend_scalar(destination, source, alpha, self.opacity);
                 continue;
@@ -95,9 +95,12 @@ impl SimdOp for BlendPlane<'_> {
                 let source_bytes = u8_ops.load(&source[offset..]);
                 let alpha_bytes = u8_ops.load(&alpha[offset..]);
 
-                let (destination_low, destination_high) = u8_ops.extend(destination_bytes);
-                let (source_low, source_high) = u8_ops.extend(source_bytes);
-                let (alpha_low, alpha_high) = u8_ops.extend(alpha_bytes);
+                let destination_low = u8_ops.extend_low(destination_bytes);
+                let destination_high = u8_ops.extend_high(destination_bytes);
+                let source_low = u8_ops.extend_low(source_bytes);
+                let source_high = u8_ops.extend_high(source_bytes);
+                let alpha_low = u8_ops.extend_low(alpha_bytes);
+                let alpha_high = u8_ops.extend_high(alpha_bytes);
 
                 let blended_low =
                     blend_words(isa, destination_low, source_low, alpha_low, self.opacity);

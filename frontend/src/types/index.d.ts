@@ -229,7 +229,7 @@ declare global {
     interface SystemStatistics {
         cpu: { cores: number; usage: number }
         load: { one: number; five: number; fifteen: number }
-        memory: { total: number; used: number; free: number }
+        memory: { total: number; used: number; process: number }
         network?: { name: string; current_in: number; current_out: number; total_in: number; total_out: number }
         storage?: { path: string; total: number; free: number }
         swap: { total: number; used: number; free: number }

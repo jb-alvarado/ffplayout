@@ -36,7 +36,7 @@ ffmpeg-next = { git = "https://github.com/zmwangx/rust-ffmpeg.git", default-feat
 log = { version = "0.4", features = ["kv"] }
 pollster = { version = "1.0", optional = true }
 regex = "1"
-rten-simd = "0.24"
+rten-simd = "0.25"
 softbuffer = { version = "0.4", optional = true, default-features = false, features = [
     "wayland",
     "wayland-dlopen",
