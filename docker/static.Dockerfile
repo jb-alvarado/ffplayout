@@ -1,9 +1,10 @@
 FROM localhost/ffplayout-ffmpeg-static:latest
 
 ARG CARGO_FEATURES=embed_frontend
+ARG FFMPEG_VAAPI=0
 
 ENV DEBIAN_FRONTEND=noninteractive \
-    FFPLAYOUT_VAAPI_SHARED=1 \
+    FFPLAYOUT_VAAPI_SHARED=$FFMPEG_VAAPI \
     PKG_CONFIG=/usr/bin/pkg-config \
     PKG_CONFIG_ALL_STATIC=1 \
     PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig \
@@ -40,4 +41,4 @@ RUN apt-get update && \
     cargo install cargo-deb && \
     rm -rf /var/lib/apt/lists/*
 
-CMD ["sh", "-c", "set -eux && echo 'Install frontend dependencies' && npm ci && echo 'Build frontend' && npm run build-only && echo 'Refresh FFmpeg link metadata' && cargo clean -p ffmpeg-sys-next && echo 'Build ffplayout binary' && cargo build --release --package ffplayout --no-default-features --features \"$CARGO_FEATURES\" && version=\"$(sed -n 's/^version = \"\\(.*\\)\"/\\1/p' Cargo.toml | head -1)\" && echo 'Copy build artifacts' && mkdir -p /artifacts && cp target/release/ffplayout /artifacts/ffplayout && echo 'Build deb package' && cargo deb --no-build -p ffplayout --manifest-path backend/app/Cargo.toml -o \"/artifacts/ffplayout_${version}-1_amd64.deb\" && echo 'Artifacts written to /artifacts'"]
+CMD ["sh", "-c", "set -eux && echo 'Install frontend dependencies' && npm ci && echo 'Build frontend' && npm run build-only && echo 'Refresh FFmpeg link metadata' && cargo clean -p ffmpeg-sys-next --release && echo 'Build ffplayout binary' && cargo build --release --package ffplayout --no-default-features --features \"$CARGO_FEATURES\" && version=\"$(sed -n 's/^version = \"\\(.*\\)\"/\\1/p' Cargo.toml | head -1)\" && echo 'Copy build artifacts' && mkdir -p /artifacts && cp target/release/ffplayout /artifacts/ffplayout && echo 'Build deb package' && cargo deb --no-build -p ffplayout --manifest-path backend/app/Cargo.toml -o \"/artifacts/ffplayout_${version}-1_amd64.deb\" && echo 'Artifacts written to /artifacts'"]

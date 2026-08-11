@@ -70,6 +70,7 @@ const APPLICATION_SYSTEM_PATHS: &[&str] = &[
     "/usr/share/ffplayout",
     "/var/lib/ffplayout",
     "/var/log/ffplayout",
+    "/var/www",
 ];
 
 fn validate_setup_paths(settings: &SetupSettings) -> Result<(), ServiceError> {
@@ -274,6 +275,7 @@ mod tests {
     #[test]
     fn setup_paths_allow_application_directories_and_custom_data_roots() {
         assert!(validate_setup_paths(&settings("/mnt/media")).is_ok());
+        assert!(validate_setup_paths(&settings("/var/www/media")).is_ok());
     }
 
     #[test]
