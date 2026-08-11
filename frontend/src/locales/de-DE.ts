@@ -39,6 +39,7 @@ export default {
         swap: 'Auslagerungsspeicher',
         total: 'Gesamt',
         usage: 'Verwendung',
+        process: 'Prozess',
         network: 'Netzwerk',
         in: 'Eingehend',
         out: 'Ausgehend',

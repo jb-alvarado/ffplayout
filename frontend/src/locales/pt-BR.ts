@@ -39,6 +39,7 @@ export default {
         swap: 'Swap',
         total: 'Total',
         usage: 'Uso',
+        process: 'Processo',
         network: 'Rede',
         in: 'Entrada',
         out: 'Saída',

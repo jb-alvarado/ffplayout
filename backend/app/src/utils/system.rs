@@ -6,7 +6,9 @@ use std::{
 
 use local_ip_address::list_afinet_netifas;
 use serde::Serialize;
-use sysinfo::{Disks, Networks, ProcessRefreshKind, ProcessesToUpdate, System, get_current_pid};
+use sysinfo::{
+    Disks, Networks, Process, ProcessRefreshKind, ProcessesToUpdate, System, get_current_pid,
+};
 
 use crate::utils::{config::PlayoutConfig, sizeof_fmt};
 
@@ -53,6 +55,7 @@ pub struct Load {
 pub struct Memory {
     pub total: u64,
     pub used: u64,
+    pub process: u64,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -144,6 +147,19 @@ impl SystemStat {
                 sys.refresh_cpu_usage();
                 sys.refresh_memory();
 
+                let process_memory = get_current_pid()
+                    .ok()
+                    .and_then(|pid| {
+                        sys.refresh_processes_specifics(
+                            ProcessesToUpdate::Some(&[pid]),
+                            false,
+                            ProcessRefreshKind::nothing().with_memory(),
+                        );
+
+                        sys.process(pid).map(Process::memory)
+                    })
+                    .unwrap_or_default();
+
                 let network_interfaces = list_afinet_netifas().unwrap_or_default();
                 let mut usage = 0.0;
                 let mut interfaces = vec![];
@@ -193,6 +209,7 @@ impl SystemStat {
                 let memory = Memory {
                     total: sys.total_memory(),
                     used: sys.used_memory(),
+                    process: process_memory,
                 };
 
                 let mut network = Network::default();

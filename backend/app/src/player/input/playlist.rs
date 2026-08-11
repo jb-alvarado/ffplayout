@@ -431,8 +431,10 @@ impl CurrentProgram {
         let out = if node.seek > 0.0 {
             node.seek + total_delta
         } else {
+            let duration = node.out - node.seek;
+
             if node.duration > total_delta {
-                info!(channel = self.channel_id; "Adjust clip duration to: <span class=\"log-number\">{total_delta:.2}</span>");
+                info!(channel = self.channel_id; "Adjust clip duration from <span class=\"log-number\">{duration:.2}</span> to <span class=\"log-number\">{total_delta:.2}</span>");
             }
 
             total_delta
