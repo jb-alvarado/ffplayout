@@ -43,15 +43,13 @@ onMounted(() => {
 })
 
 async function getUsers() {
-    authFetch<User[]>('/api/users', {
+    const data = await authFetch<User[]>('/api/users', {
         method: 'GET',
         headers: authStore.authHeader,
     })
-        .then((data) => {
-            users.value = data
 
-            selected.value = configStore.currentUser
-        })
+    users.value = data
+    selected.value = configStore.currentUser
 }
 
 function onChange(event: Event) {
@@ -116,12 +114,17 @@ async function addUser(add: boolean) {
         if (user.value.username && user.value.password && user.value.password === user.value.confirm) {
             await authStore.inspectToken()
             try {
+                const username = user.value.username
                 await configStore.addNewUser(user.value)
                 showUserModal.value = false
 
                 indexStore.msgAlert('success', t('user.addSuccess'), 2)
                 await getUsers()
-                await getUserConfig()
+                const createdUser = users.value.find((item) => item.username === username)
+                if (createdUser) {
+                    selected.value = createdUser.id
+                    await getUserConfig()
+                }
             } catch {
                 indexStore.msgAlert('error', t('user.addFailed'), 3)
             }
@@ -233,7 +236,7 @@ async function onSubmitUser() {
     </div>
 
     <GenericModal :show="showUserModal" title="Add user" :modal-action="addUser">
-        <div class="w-full max-w-125 h-90">
+        <div class="w-full max-w-125 h-110">
             <fieldset class="fieldset">
                 <legend class="fieldset-legend">{{ t('user.name') }}</legend>
                 <input v-model="user.username" type="text" name="username" class="input w-full" />
