@@ -102,13 +102,15 @@ elif [[ $target == "debian-static" ]]; then
 
     docker build \
         --build-arg FFMPEG_DEBUG="${FFMPEG_DEBUG:-0}" \
-        --build-arg FFMPEG_VERSION="${FFMPEG_VERSION:-release/8.1}" \
+        --build-arg FFMPEG_VERSION="${FFMPEG_VERSION:-release/9.0}" \
+        --build-arg FFMPEG_VAAPI="${FFMPEG_VAAPI:-0}" \
         "${ffmpeg_component_args[@]}" \
         -t localhost/ffplayout-ffmpeg-static:latest \
         -f ./docker/ffmpeg.Dockerfile .
 
     docker build \
         --build-arg CARGO_FEATURES="$static_cargo_features" \
+        --build-arg FFMPEG_VAAPI="${FFMPEG_VAAPI:-0}" \
         -t localhost/ffplayout-static-builder:latest \
         -f ./docker/static.Dockerfile .
 

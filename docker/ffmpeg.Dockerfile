@@ -14,6 +14,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
     CC=gcc \
     CXX=g++
 
+ARG FFMPEG_VAAPI=0
+
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         autoconf \
@@ -30,9 +32,10 @@ RUN apt-get update && \
         nasm \
         ninja-build \
         perl \
-        pkg-config \
-        libva-dev \
-        libdrm-dev && \
+        pkg-config && \
+    if [ "$FFMPEG_VAAPI" = 1 ]; then \
+        apt-get install -y --no-install-recommends libva-dev libdrm-dev; \
+    fi && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /tmp
@@ -142,8 +145,10 @@ RUN mkdir -p /ffmpeg-debug && \
     git clone --depth 1 --branch "$FFMPEG_VERSION" https://github.com/FFmpeg/FFmpeg.git && cd FFmpeg && \
     avdevice_flag=--disable-avdevice && \
     avfilter_flag=--disable-avfilter && \
+    vaapi_flags= && \
     if [ "$FFMPEG_AVDEVICE" = 1 ]; then avdevice_flag=--enable-avdevice; fi && \
     if [ "$FFMPEG_AVFILTER" = 1 ]; then avfilter_flag=--enable-avfilter; fi && \
+    if [ "$FFMPEG_VAAPI" = 1 ]; then vaapi_flags="--enable-vaapi --enable-libdrm"; fi && \
     if ! ./configure \
         --pkg-config-flags=--static \
         --extra-libs="-lm -lpthread" \
@@ -171,8 +176,7 @@ RUN mkdir -p /ffmpeg-debug && \
         --enable-libx265 \
         --enable-openssl \
         --enable-libvpl \
-        --enable-vaapi \
-        --enable-libdrm \
+        $vaapi_flags \
         --enable-libsvtav1 \
         --enable-libdav1d; then \
         status=1; \

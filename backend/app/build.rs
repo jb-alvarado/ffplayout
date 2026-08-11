@@ -71,7 +71,8 @@ fn main() {
         run_npm(&["run", "build"]);
     }
 
-    if std::env::var_os("FFPLAYOUT_VAAPI_SHARED").is_some() {
+    println!("cargo:rerun-if-env-changed=FFPLAYOUT_VAAPI_SHARED");
+    if matches!(std::env::var("FFPLAYOUT_VAAPI_SHARED").as_deref(), Ok("1")) {
         println!("cargo:rustc-link-lib=dylib=va-drm");
         println!("cargo:rustc-link-lib=dylib=va");
         println!("cargo:rustc-link-lib=dylib=drm");
