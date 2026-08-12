@@ -183,14 +183,14 @@ async function downloadLog() {
                     :clearable="false"
                     :hide-navigation="['time']"
                     :action-row="{ showCancel: false, showSelect: false, showPreview: false }"
-                    :formats="{ day: 'dd', input: 'EEEE dd. LLL yyyy' }"
+                    :formats="{ day: 'dd', input: 'EEE dd. LLL yyyy' }"
                     :time-config="{ enableTimePicker: false }"
                     model-type="yyyy-MM-dd"
                     auto-apply
-                    class="max-w-42.5"
+                    class="max-w-48"
                     :locale="lang"
                     :dark="indexStore.darkMode"
-                    :ui="{ input: 'join-item input !input-sm !max-w-42.5 text-right !pe-3' }"
+                    :ui="{ input: 'join-item input input-sm! max-w-48! text-right pe-3!' }"
                     required
                 />
                 <button class="btn btn-sm btn-primary join-item" :title="t('log.reload')" @click="getLog()">
