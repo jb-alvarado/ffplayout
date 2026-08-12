@@ -23,6 +23,14 @@ use crate::{
 
 const NEXT_START_THRESHOLD: f64 = 1.5;
 const IS_CLOSE_THRESHOLD: f64 = 2.0;
+const CLIP_DURATION_ADJUSTMENT_THRESHOLD: f64 = 0.5;
+
+#[derive(Debug, PartialEq)]
+enum LastClipEnd {
+    Adjust { scheduled_duration: f64, out: f64 },
+    TooShort { missing_duration: f64 },
+    Unchanged,
+}
 
 fn placeholder_duration(requested: f64, natural: f64) -> f64 {
     let requested = requested
@@ -37,6 +45,39 @@ fn placeholder_duration(requested: f64, natural: f64) -> f64 {
         (None, Some(natural)) => natural,
         (None, None) => 0.0,
     }
+}
+
+fn last_clip_end(node: &Media, total_delta: f64) -> LastClipEnd {
+    let scheduled_duration = node.out - node.seek;
+    let available_duration = node.duration - node.seek;
+    let extends_past_playlist_end = node.duration > total_delta || node.out > total_delta;
+    let can_fill_remaining_time =
+        available_duration >= total_delta || scheduled_duration >= total_delta;
+    let differs_significantly =
+        (scheduled_duration - total_delta).abs() > CLIP_DURATION_ADJUSTMENT_THRESHOLD;
+
+    if total_delta > 1.0
+        && extends_past_playlist_end
+        && can_fill_remaining_time
+        && differs_significantly
+    {
+        return LastClipEnd::Adjust {
+            scheduled_duration,
+            out: if node.seek > 0.0 {
+                node.seek + total_delta
+            } else {
+                total_delta
+            },
+        };
+    }
+
+    if total_delta > scheduled_duration {
+        return LastClipEnd::TooShort {
+            missing_duration: total_delta - scheduled_duration,
+        };
+    }
+
+    LastClipEnd::Unchanged
 }
 
 /// Struct for current playlist.
@@ -422,31 +463,23 @@ impl CurrentProgram {
         self.gen_source(node, last_index).await;
     }
 
-    /// when we come to last clip in playlist,
-    /// or when we reached total playtime,
-    /// we end up here
+    /// Finish the playlist by trimming its last clip to the remaining time,
+    /// or report when the clip cannot fill it.
     async fn handle_list_end(&mut self, mut node: Media, total_delta: f64, last_index: usize) {
         debug!(channel = self.channel_id; "Handle last clip from day");
 
-        let out = if node.seek > 0.0 {
-            node.seek + total_delta
-        } else {
-            let duration = node.out - node.seek;
-
-            if node.duration > total_delta {
-                info!(channel = self.channel_id; "Adjust clip duration from <span class=\"log-number\">{duration:.2}</span> to <span class=\"log-number\">{total_delta:.2}</span>");
+        match last_clip_end(&node, total_delta) {
+            LastClipEnd::Adjust {
+                scheduled_duration,
+                out,
+            } => {
+                info!(channel = self.channel_id; "Adjust clip duration from <span class=\"log-number\">{scheduled_duration:.2}</span> to <span class=\"log-number\">{total_delta:.2}</span>");
+                node.out = out;
             }
-
-            total_delta
-        };
-
-        if (node.duration > total_delta || node.out > total_delta)
-            && (node.duration - node.seek >= total_delta || node.out - node.seek >= total_delta)
-            && total_delta > 1.0
-        {
-            node.out = out;
-        } else if total_delta > node.out - node.seek {
-            warn!(channel = self.channel_id; "Playlist is not long enough: <span class=\"log-number\">{:.2}</span> seconds needed", total_delta - (node.out - node.seek));
+            LastClipEnd::TooShort { missing_duration } => {
+                warn!(channel = self.channel_id; "Playlist is not long enough: <span class=\"log-number\">{missing_duration:.2}</span> seconds needed");
+            }
+            LastClipEnd::Unchanged => {}
         }
 
         node.skip = false;
@@ -779,7 +812,17 @@ impl CurrentProgram {
 
 #[cfg(test)]
 mod tests {
-    use super::placeholder_duration;
+    use super::{LastClipEnd, last_clip_end, placeholder_duration};
+    use crate::player::utils::Media;
+
+    fn media(seek: f64, out: f64, duration: f64) -> Media {
+        Media {
+            seek,
+            out,
+            duration,
+            ..Media::default()
+        }
+    }
 
     #[test]
     fn placeholder_never_exceeds_its_natural_duration() {
@@ -794,5 +837,70 @@ mod tests {
     #[test]
     fn missing_playlist_uses_one_natural_placeholder_duration() {
         assert_eq!(placeholder_duration(86_400.0, 12.0), 12.0);
+    }
+
+    #[test]
+    fn last_clip_is_trimmed_to_the_remaining_playlist_time() {
+        let node = media(0.0, 120.0, 120.0);
+
+        assert_eq!(
+            last_clip_end(&node, 100.0),
+            LastClipEnd::Adjust {
+                scheduled_duration: 120.0,
+                out: 100.0,
+            }
+        );
+    }
+
+    #[test]
+    fn last_clip_preserves_its_seek_offset_when_trimmed() {
+        let node = media(10.0, 130.0, 130.0);
+
+        assert_eq!(
+            last_clip_end(&node, 100.0),
+            LastClipEnd::Adjust {
+                scheduled_duration: 120.0,
+                out: 110.0,
+            }
+        );
+    }
+
+    #[test]
+    fn last_clip_is_not_trimmed_within_duration_tolerance() {
+        let node = media(0.0, 100.5, 100.5);
+
+        assert_eq!(last_clip_end(&node, 100.0), LastClipEnd::Unchanged);
+    }
+
+    #[test]
+    fn last_clip_can_use_its_available_duration_to_fill_the_remaining_time() {
+        let node = media(0.0, 80.0, 120.0);
+
+        assert_eq!(
+            last_clip_end(&node, 100.0),
+            LastClipEnd::Adjust {
+                scheduled_duration: 80.0,
+                out: 100.0,
+            }
+        );
+    }
+
+    #[test]
+    fn last_clip_is_not_adjusted_for_one_second_or_less() {
+        let node = media(0.0, 10.0, 10.0);
+
+        assert_eq!(last_clip_end(&node, 1.0), LastClipEnd::Unchanged);
+    }
+
+    #[test]
+    fn last_clip_reports_when_it_cannot_fill_the_remaining_time() {
+        let node = media(0.0, 90.0, 90.0);
+
+        assert_eq!(
+            last_clip_end(&node, 100.0),
+            LastClipEnd::TooShort {
+                missing_duration: 10.0,
+            }
+        );
     }
 }
