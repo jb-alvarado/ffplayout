@@ -1,5 +1,5 @@
 use sqlx::{
-    Executor, Row, Sqlite,
+    Executor, Row, Sqlite, SqliteConnection,
     sqlite::{SqlitePool, SqliteQueryResult},
 };
 
@@ -69,6 +69,51 @@ pub async fn update_output(
     audio_codec: Option<&str>,
     audio_bitrate: Option<i64>,
 ) -> Result<SqliteQueryResult, ProcessError> {
+    let mut connection = pool.acquire().await?;
+    update_output_on(
+        &mut connection,
+        id,
+        channel_id,
+        hls_variants,
+        stream_url,
+        stream_type,
+        stream_format,
+        hls_playlist_name,
+        hls_segment_duration,
+        hls_list_size,
+        desktop_fullscreen,
+        width,
+        height,
+        fps,
+        video_codec,
+        video_options,
+        audio_codec,
+        audio_bitrate,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn update_output_on(
+    connection: &mut SqliteConnection,
+    id: i32,
+    channel_id: i32,
+    hls_variants: &str,
+    stream_url: &str,
+    stream_type: Option<&str>,
+    stream_format: Option<&str>,
+    hls_playlist_name: Option<&str>,
+    hls_segment_duration: Option<i64>,
+    hls_list_size: Option<i64>,
+    desktop_fullscreen: bool,
+    width: i64,
+    height: i64,
+    fps: f64,
+    video_codec: Option<&str>,
+    video_options: &str,
+    audio_codec: Option<&str>,
+    audio_bitrate: Option<i64>,
+) -> Result<SqliteQueryResult, ProcessError> {
     const QUERY: &str = "UPDATE outputs SET hls_variants = $3, stream_url = $4, stream_type = $5, stream_format = $6, hls_playlist_name = $7, hls_segment_duration = $8, hls_list_size = $9, desktop_fullscreen = $10, width = $11, height = $12, fps = $13, video_codec = $14, video_options = $15, audio_codec = $16, audio_bitrate = $17 WHERE id = $1 AND channel_id = $2";
 
     let result = sqlx::query(QUERY)
@@ -89,7 +134,7 @@ pub async fn update_output(
         .bind(video_options)
         .bind(audio_codec)
         .bind(audio_bitrate)
-        .execute(pool)
+        .execute(connection)
         .await?;
 
     Ok(result)

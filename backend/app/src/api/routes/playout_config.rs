@@ -70,6 +70,7 @@ pub struct PlayoutCodecOptions {
     pub srt: OutputCodecOptions,
     pub udp: OutputCodecOptions,
     pub custom: OutputCodecOptions,
+    pub recording: OutputCodecOptions,
 }
 
 #[derive(Debug, Serialize)]
@@ -266,13 +267,57 @@ pub async fn update_playout_config(
         .map_err(|error| ServiceError::BadRequest(error.to_string()))?;
     validate_live_loudness(&data.audio)?;
     data.output.validate().map_err(ServiceError::BadRequest)?;
+    data.recording
+        .validate()
+        .map_err(ServiceError::BadRequest)?;
+    if data.recording.enable {
+        if data.recording.source != crate::utils::config::RecordingSource::Encode
+            && data.recording.source_output_id != Some(data.output.id)
+        {
+            return Err(ServiceError::BadRequest(
+                "recording source must reference the active output".to_string(),
+            ));
+        }
+        match data.recording.source {
+            crate::utils::config::RecordingSource::Stream
+                if data.output.mode != OutputMode::Stream =>
+            {
+                return Err(ServiceError::BadRequest(
+                    "recording stream source must reference a stream output".to_string(),
+                ));
+            }
+            crate::utils::config::RecordingSource::HlsVariant
+                if data.output.mode != OutputMode::HLS =>
+            {
+                return Err(ServiceError::BadRequest(
+                    "recording HLS source must reference an HLS output".to_string(),
+                ));
+            }
+            _ => {}
+        }
+        if data.recording.source == crate::utils::config::RecordingSource::HlsVariant {
+            let has_variant = data
+                .output
+                .hls_streams()
+                .map_err(ServiceError::BadRequest)?
+                .iter()
+                .any(|variant| variant.name == data.recording.variant);
+            if !has_variant {
+                return Err(ServiceError::BadRequest(format!(
+                    "unknown recording HLS variant {:?}",
+                    data.recording.variant
+                )));
+            }
+        }
+    }
 
     let is_hls = data.output.mode == OutputMode::HLS;
     let is_encoded = matches!(data.output.mode, OutputMode::HLS | OutputMode::Stream);
     let video_options = serde_json::to_string(&data.output.video_options)
         .map_err(|error| ServiceError::BadRequest(error.to_string()))?;
-    handles::update_output(
-        &state.pool,
+    let mut transaction = state.pool.begin().await?;
+    handles::update_output_on(
+        &mut transaction,
         data.output.id,
         id,
         &data.output.hls_variants.join(";"),
@@ -304,7 +349,9 @@ pub async fn update_playout_config(
             .then_some(i64::from(data.output.audio_bitrate)),
     )
     .await?;
-    handles::update_configuration(&state.pool, config_id, data).await?;
+    handles::update_recording_on(&mut transaction, id, &data.recording).await?;
+    handles::update_configuration_on(&mut transaction, config_id, data).await?;
+    transaction.commit().await?;
     let new_config = get_config(&state.pool, id).await?;
     let mut queues = state.mail_queues.lock().await;
 
@@ -404,6 +451,7 @@ pub async fn get_playout_codecs(
         srt: output_codec_options(ff_engine::FfmpegOutputTarget::Srt),
         udp: output_codec_options(ff_engine::FfmpegOutputTarget::Udp),
         custom: custom_output_codec_options(),
+        recording: output_codec_options(ff_engine::FfmpegOutputTarget::Matroska),
     }))
 }
 

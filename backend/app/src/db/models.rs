@@ -457,6 +457,26 @@ impl Configuration {
 }
 
 #[derive(Clone, Default, Debug, Deserialize, Serialize, sqlx::FromRow)]
+pub struct Recording {
+    pub id: i32,
+    pub channel_id: i32,
+    pub enabled: bool,
+    pub source: String,
+    pub source_output_id: Option<i32>,
+    pub hls_variant: String,
+    pub path: String,
+    pub segment_duration: i64,
+    pub retention_days: i64,
+    pub minimum_free_space_gb: i64,
+    pub width: i64,
+    pub height: i64,
+    pub video_codec: String,
+    pub video_options: String,
+    pub audio_codec: String,
+    pub audio_bitrate: i64,
+}
+
+#[derive(Clone, Default, Debug, Deserialize, Serialize, sqlx::FromRow)]
 pub struct Output {
     pub id: i32,
     pub channel_id: i32,

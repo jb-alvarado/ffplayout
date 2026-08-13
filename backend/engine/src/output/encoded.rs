@@ -11,7 +11,11 @@ use ffmpeg::{
 };
 use ffmpeg_next as ffmpeg;
 
-use super::{hls, vtt};
+use super::{
+    hls,
+    recording::{self, RecordingMonitor, RecordingMuxer},
+    vtt,
+};
 use crate::{
     HlsHealth,
     analysis::{audio_level::AudioLevelMeter, loudness::LoudnessMeter},
@@ -40,7 +44,13 @@ pub(super) struct EncodedOutput {
     audio_buffer_pts: Option<i64>,
     audio_sample_rate: u32,
     clock: PlayoutClock,
+    pace_output: bool,
     hls_health: Option<HlsHealth>,
+    recording: Option<RecordingMuxer>,
+    recording_video_stream_index: usize,
+    transcoded_recording: Option<Box<Self>>,
+    recording_monitor: Option<RecordingMonitor>,
+    channel_id: Option<i32>,
 }
 
 #[derive(Clone)]
@@ -54,6 +64,11 @@ pub(super) enum EncodedFormat {
         subtitle: Option<HlsSubtitle>,
         segment_seconds: u32,
         list_size: u32,
+    },
+    Recording {
+        segment_seconds: u32,
+        input_width: u32,
+        input_height: u32,
     },
 }
 
@@ -175,6 +190,42 @@ struct SubtitleOutputStream {
 }
 
 impl EncodedOutput {
+    pub(super) fn open_recording(
+        cfg: &OutputConfig,
+        recording_config: &crate::RecordingConfig,
+    ) -> Result<Self> {
+        let encode = recording_config
+            .encode
+            .as_ref()
+            .context("dedicated recording encode settings are missing")?;
+        let input_width = cfg.width;
+        let input_height = cfg.height;
+        let mut recording_cfg = cfg.clone();
+        recording_cfg.width = encode.width.max(1);
+        recording_cfg.height = encode.height.max(1);
+        recording_cfg.video_codec = encode.video_codec.clone();
+        recording_cfg.video_options = encode.video_options.clone();
+        recording_cfg.audio_codec = encode.audio_codec.clone();
+        recording_cfg.audio_bitrate = encode.audio_bitrate;
+        recording_cfg.audio_effects = crate::AudioEffectsControl::default();
+        recording_cfg.audio_level_callback = None;
+        recording_cfg.recording = None;
+        let (pattern, monitor) = recording::prepare_recording(recording_config)?;
+        let mut output = Self::open(
+            pattern
+                .to_str()
+                .context("recording path is not valid UTF-8")?,
+            &recording_cfg,
+            EncodedFormat::Recording {
+                segment_seconds: recording_config.segment_duration,
+                input_width,
+                input_height,
+            },
+        )?;
+        output.recording_monitor = Some(monitor);
+        Ok(output)
+    }
+
     pub(super) fn open(
         path: &str,
         cfg: &OutputConfig,
@@ -189,13 +240,18 @@ impl EncodedOutput {
         output_format: EncodedFormat,
         hls_health: Option<HlsHealth>,
     ) -> Result<Self> {
+        let pace_output = !matches!(&output_format, EncodedFormat::Recording { .. });
         let hls_variants = match &output_format {
-            EncodedFormat::Auto | EncodedFormat::Stream { .. } => &[][..],
+            EncodedFormat::Auto
+            | EncodedFormat::Stream { .. }
+            | EncodedFormat::Recording { .. } => &[][..],
             EncodedFormat::Hls { variants, .. } => variants.as_slice(),
         };
         let hls_subtitle = match &output_format {
             EncodedFormat::Hls { subtitle, .. } => subtitle.as_ref(),
-            EncodedFormat::Auto | EncodedFormat::Stream { .. } => None,
+            EncodedFormat::Auto
+            | EncodedFormat::Stream { .. }
+            | EncodedFormat::Recording { .. } => None,
         };
         let vtt_subtitles = hls_subtitle.is_some();
         hls::validate_variants(hls_variants)?;
@@ -272,6 +328,7 @@ impl EncodedOutput {
                 format::output_as_with(path, muxer, network_io_options())?
             }
             EncodedFormat::Stream { ref muxer } => format::output_as(path, muxer)?,
+            EncodedFormat::Recording { .. } => recording::segment_output_context(Path::new(path))?,
             EncodedFormat::Auto if path.starts_with("rtmp://") || path.starts_with("rtmps://") => {
                 format::output_as_with(path, "flv", network_io_options())?
             }
@@ -280,10 +337,19 @@ impl EncodedOutput {
             }
             EncodedFormat::Auto => format::output(path)?,
         };
-        let global_header = octx
-            .format()
-            .flags()
-            .contains(format::flag::Flags::GLOBAL_HEADER);
+        // Matroska stores codec initialization data in its header. Keep it on
+        // the shared encoders when a packet-copy recording is active; FFmpeg's
+        // stream muxers accept those headers as well. An encode-mode recording
+        // runs on its own independent encoders, so it must not affect the
+        // primary output's header behavior.
+        let global_header = cfg
+            .recording
+            .as_ref()
+            .is_some_and(|recording| recording.encode.is_none())
+            || octx
+                .format()
+                .flags()
+                .contains(format::flag::Flags::GLOBAL_HEADER);
 
         let stream_count = hls_variants.len().max(1);
         let mut video_streams = Vec::with_capacity(stream_count);
@@ -308,6 +374,16 @@ impl EncodedOutput {
         match output_format {
             EncodedFormat::Auto | EncodedFormat::Stream { .. } => {
                 octx.write_header()?;
+            }
+            EncodedFormat::Recording {
+                segment_seconds, ..
+            } => {
+                let mut options = ffmpeg::Dictionary::new();
+                options.set("segment_time", &segment_seconds.to_string());
+                options.set("segment_format", "matroska");
+                options.set("reset_timestamps", "1");
+                options.set("strftime", "1");
+                reject_unused_options(octx.write_header_with(options)?)?;
             }
             EncodedFormat::Hls {
                 segment_seconds,
@@ -343,6 +419,52 @@ impl EncodedOutput {
             }
         }
 
+        let recording_video_stream_index = cfg
+            .recording
+            .as_ref()
+            .map_or(0, |recording| recording.video_stream_index);
+        let recording = if let Some(recording_config) = cfg
+            .recording
+            .as_ref()
+            .filter(|recording| recording.encode.is_none())
+        {
+            match (|| -> Result<_> {
+                let video_stream = video_streams
+                    .get(recording_video_stream_index)
+                    .context("recording video stream index is out of range")?;
+                let audio_stream = audio_streams
+                    .get(recording_video_stream_index)
+                    .context("recording audio stream index is out of range")?;
+
+                RecordingMuxer::open(
+                    recording_config,
+                    &video_stream.encoder,
+                    &audio_stream.encoder,
+                )
+            })() {
+                Ok(recording) => Some(recording),
+                Err(error) => {
+                    log::error!(channel = cfg.channel_id.unwrap_or_default(); "Recording disabled: {error}");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        let transcoded_recording = if let Some(recording_config) = cfg.recording.as_ref()
+            && recording_config.encode.is_some()
+        {
+            match Self::open_recording(cfg, recording_config).map(Box::new) {
+                Ok(recording) => Some(recording),
+                Err(error) => {
+                    log::error!(channel = cfg.channel_id.unwrap_or_default(); "Recording disabled: {error}");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         Ok(Self {
             octx,
             video_streams,
@@ -359,7 +481,13 @@ impl EncodedOutput {
             audio_buffer_pts: None,
             audio_sample_rate: cfg.sample_rate,
             clock: PlayoutClock::new(),
+            pace_output,
             hls_health,
+            recording,
+            recording_video_stream_index,
+            transcoded_recording,
+            recording_monitor: None,
+            channel_id: cfg.channel_id,
         })
     }
 
@@ -397,7 +525,15 @@ impl EncodedOutput {
                 self.write_video_packets(index)?;
             }
             Ok::<_, anyhow::Error>(())
-        })
+        })?;
+        if let Some(error) = self
+            .transcoded_recording
+            .as_mut()
+            .and_then(|recording| recording.encode_video(frame).err())
+        {
+            self.disable_transcoded_recording(error);
+        }
+        Ok(())
     }
 
     pub(super) fn encode_audio(&mut self, frame: &frame::Audio) -> Result<()> {
@@ -425,7 +561,15 @@ impl EncodedOutput {
             Ok::<_, anyhow::Error>(())
         })?;
 
-        self.write_complete_audio_frames()
+        self.write_complete_audio_frames()?;
+        if let Some(error) = self
+            .transcoded_recording
+            .as_mut()
+            .and_then(|recording| recording.encode_audio(&frame).err())
+        {
+            self.disable_transcoded_recording(error);
+        }
+        Ok(())
     }
 
     fn align_audio_buffer_to_frame_pts(&mut self, frame_pts: Option<i64>) -> Result<()> {
@@ -536,7 +680,7 @@ impl EncodedOutput {
                 }
                 self.write_audio_packets(index)?;
             }
-            Ok(())
+            Ok::<_, anyhow::Error>(())
         })
     }
 
@@ -558,6 +702,9 @@ impl EncodedOutput {
         stream_index: usize,
         encoder_time_base: Rational,
     ) -> Result<()> {
+        if let Some(monitor) = &mut self.recording_monitor {
+            monitor.check()?;
+        }
         let stream_time_base = self
             .octx
             .stream(stream_index)
@@ -566,8 +713,10 @@ impl EncodedOutput {
 
         packet.set_stream(stream_index);
         packet.rescale_ts(encoder_time_base, stream_time_base);
-        self.clock
-            .wait_until(packet.dts().or_else(|| packet.pts()), stream_time_base);
+        if self.pace_output {
+            self.clock
+                .wait_until(packet.dts().or_else(|| packet.pts()), stream_time_base);
+        }
         packet.write_interleaved(&mut self.octx)?;
         if let Some(health) = &self.hls_health {
             health.mark_muxed();
@@ -593,8 +742,19 @@ impl EncodedOutput {
             }
 
             self.octx.write_trailer()?;
-            Ok(())
-        })
+            if let Some(recording) = self.recording.take()
+                && let Err(error) = recording.finish()
+            {
+                self.log_recording_error(error);
+            }
+            Ok::<_, anyhow::Error>(())
+        })?;
+        if let Some(recording) = self.transcoded_recording.take()
+            && let Err(error) = recording.finish()
+        {
+            self.log_recording_error(error);
+        }
+        Ok(())
     }
 
     fn flush_audio_resampler(&mut self, index: usize) -> Result<()> {
@@ -638,6 +798,16 @@ impl EncodedOutput {
             }
             let stream_index = self.video_streams[index].stream_index;
             let time_base = self.video_streams[index].encoder.time_base();
+            let recording_error = (index == self.recording_video_stream_index)
+                .then(|| {
+                    self.recording
+                        .as_mut()
+                        .and_then(|recording| recording.write_video(&packet, time_base).err())
+                })
+                .flatten();
+            if let Some(error) = recording_error {
+                self.disable_copy_recording(error);
+            }
             self.write_packet(&mut packet, stream_index, time_base)?;
         }
         Ok(())
@@ -652,9 +822,33 @@ impl EncodedOutput {
         {
             let stream_index = self.audio_streams[index].stream_index;
             let time_base = self.audio_streams[index].encoder.time_base();
+            let recording_error = (index == self.recording_video_stream_index)
+                .then(|| {
+                    self.recording
+                        .as_mut()
+                        .and_then(|recording| recording.write_audio(&packet, time_base).err())
+                })
+                .flatten();
+            if let Some(error) = recording_error {
+                self.disable_copy_recording(error);
+            }
             self.write_packet(&mut packet, stream_index, time_base)?;
         }
         Ok(())
+    }
+
+    fn disable_copy_recording(&mut self, error: anyhow::Error) {
+        self.recording.take();
+        self.log_recording_error(error);
+    }
+
+    fn disable_transcoded_recording(&mut self, error: anyhow::Error) {
+        self.transcoded_recording.take();
+        self.log_recording_error(error);
+    }
+
+    fn log_recording_error(&self, error: impl std::fmt::Display) {
+        log::error!(channel = self.channel_id.unwrap_or_default(); "Recording disabled: {error}");
     }
 
     fn write_subtitle_packet(&mut self, packet: &mut Packet) -> Result<()> {
@@ -728,6 +922,14 @@ fn open_video_stream(
     let cpu_input_format = encoder_backend.cpu_input_format();
     let width = variant.map_or(cfg.width, |variant| variant.width);
     let height = variant.map_or(cfg.height, |variant| variant.height);
+    let (input_width, input_height) = match &output_format {
+        EncodedFormat::Recording {
+            input_width,
+            input_height,
+            ..
+        } => (*input_width, *input_height),
+        _ => (cfg.width, cfg.height),
+    };
     video_ctx.set_width(width);
     video_ctx.set_height(height);
     video_ctx.set_format(encoder_format);
@@ -741,7 +943,9 @@ fn open_video_stream(
         EncodedFormat::Hls {
             segment_seconds, ..
         } => video_ctx.set_gop(hls_gop_size(cfg.fps, *segment_seconds)),
-        EncodedFormat::Stream { .. } => video_ctx.set_gop(stream_gop_size(cfg.fps)),
+        EncodedFormat::Stream { .. } | EncodedFormat::Recording { .. } => {
+            video_ctx.set_gop(stream_gop_size(cfg.fps));
+        }
         EncodedFormat::Auto => {}
     }
     let mut video_flags = codec::flag::Flags::empty();
@@ -774,7 +978,7 @@ fn open_video_stream(
     encoder_backend.configure_options(&mut options, cfg, maxrate);
 
     let mut video_encoder = match output_format {
-        EncodedFormat::Auto | EncodedFormat::Stream { .. } => {
+        EncodedFormat::Auto | EncodedFormat::Stream { .. } | EncodedFormat::Recording { .. } => {
             video_ctx.open_as_with(video_codec, options)?
         }
         EncodedFormat::Hls { .. } => {
@@ -796,20 +1000,20 @@ fn open_video_stream(
     video_stream.set_parameters(&video_encoder);
     video_stream.set_time_base(cfg.video_time_base);
     let stream_index = video_stream.index();
-    let scaler = if width == cfg.width && height == cfg.height && cpu_input_format == Pixel::YUV420P
-    {
-        None
-    } else {
-        Some(scaling::Context::get(
-            Pixel::YUV420P,
-            cfg.width,
-            cfg.height,
-            cpu_input_format,
-            width,
-            height,
-            scaling::flag::Flags::BILINEAR,
-        )?)
-    };
+    let scaler =
+        if width == input_width && height == input_height && cpu_input_format == Pixel::YUV420P {
+            None
+        } else {
+            Some(scaling::Context::get(
+                Pixel::YUV420P,
+                input_width,
+                input_height,
+                cpu_input_format,
+                width,
+                height,
+                scaling::flag::Flags::BILINEAR,
+            )?)
+        };
 
     Ok(VideoOutputStream {
         stream_index,
@@ -1337,6 +1541,215 @@ mod open_tests {
 
         output.finish().unwrap();
         assert!(path.exists(), "expected stream.ts to exist");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn stream_output_can_open_segmented_matroska_recording() {
+        ffmpeg::init().ok();
+        let dir = std::env::temp_dir().join(format!("recording_test_{}", std::process::id()));
+        fs::remove_dir_all(&dir).ok();
+        fs::create_dir_all(&dir).unwrap();
+        let stream_path = dir.join("stream.ts");
+        let recording_path = dir.join("recording");
+        let cfg = OutputConfig::new(320, 240, 25, 44_100).with_recording(Some(
+            crate::RecordingConfig::new(recording_path.to_string_lossy(), 300),
+        ));
+
+        let mut output = EncodedOutput::open(
+            stream_path.to_str().unwrap(),
+            &cfg,
+            EncodedFormat::Stream {
+                muxer: "mpegts".to_string(),
+            },
+        )
+        .unwrap();
+
+        for index in 0..25 {
+            let mut video = frame::Video::new(Pixel::YUV420P, 320, 240);
+            video.set_pts(Some(index));
+            video.data_mut(0).fill(16);
+            output.encode_video(&video).unwrap();
+
+            let mut audio = frame::Audio::new(
+                Sample::F32(ffmpeg::format::sample::Type::Planar),
+                output.audio_frame_size(),
+                ChannelLayout::STEREO,
+            );
+            audio.set_rate(44_100);
+            audio.set_pts(Some(index * output.audio_frame_size() as i64));
+            for channel in 0..2 {
+                audio.plane_mut::<f32>(channel).fill(0.0);
+            }
+            output.encode_audio(&audio).unwrap();
+        }
+
+        output.finish().unwrap();
+        assert!(
+            recording_path.exists(),
+            "expected recording directory to exist"
+        );
+        assert!(
+            fs::read_dir(&recording_path).unwrap().next().is_some(),
+            "expected a recording segment"
+        );
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn recording_open_failure_does_not_stop_primary_output() {
+        ffmpeg::init().ok();
+        let dir =
+            std::env::temp_dir().join(format!("recording_failure_test_{}", std::process::id()));
+        fs::remove_dir_all(&dir).ok();
+        fs::create_dir_all(&dir).unwrap();
+        let blocked_path = dir.join("not-a-directory");
+        fs::write(&blocked_path, "file").unwrap();
+        let cfg = OutputConfig::new(320, 240, 25, 44_100).with_recording(Some(
+            crate::RecordingConfig::new(blocked_path.to_string_lossy(), 300),
+        ));
+
+        let output = EncodedOutput::open(
+            dir.join("stream.ts").to_str().unwrap(),
+            &cfg,
+            EncodedFormat::Stream {
+                muxer: "mpegts".to_string(),
+            },
+        );
+
+        assert!(
+            output.is_ok(),
+            "recording errors must not stop the primary output"
+        );
+        output.unwrap().finish().unwrap();
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn hls_output_can_copy_to_segmented_matroska_recording() {
+        ffmpeg::init().ok();
+        let dir = std::env::temp_dir().join(format!("hls_recording_test_{}", std::process::id()));
+        fs::remove_dir_all(&dir).ok();
+        fs::create_dir_all(&dir).unwrap();
+        let recording_path = dir.join("recording");
+        let cfg = OutputConfig::new(320, 240, 25, 44_100).with_recording(Some(
+            crate::RecordingConfig::new(recording_path.to_string_lossy(), 300),
+        ));
+        let mut output = EncodedOutput::open(
+            dir.join("stream.m3u8").to_str().unwrap(),
+            &cfg,
+            EncodedFormat::Hls {
+                variants: vec![],
+                subtitle: None,
+                segment_seconds: 1,
+                list_size: 60,
+            },
+        )
+        .unwrap();
+
+        for index in 0..25 {
+            let mut video = frame::Video::new(Pixel::YUV420P, 320, 240);
+            video.set_pts(Some(index));
+            video.data_mut(0).fill(16);
+            video.data_mut(1).fill(128);
+            video.data_mut(2).fill(128);
+            output.encode_video(&video).unwrap();
+            let mut audio = frame::Audio::new(
+                Sample::F32(ffmpeg::format::sample::Type::Planar),
+                output.audio_frame_size(),
+                ChannelLayout::STEREO,
+            );
+            audio.set_rate(44_100);
+            audio.set_pts(Some(index * output.audio_frame_size() as i64));
+            for channel in 0..2 {
+                audio.plane_mut::<f32>(channel).fill(0.0);
+            }
+            output.encode_audio(&audio).unwrap();
+        }
+        output.finish().unwrap();
+        let segments = fs::read_dir(&recording_path)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert!(!segments.is_empty());
+        assert!(segments.iter().all(|name| !name.contains('%')));
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn stream_output_can_transcode_segmented_matroska_recording() {
+        ffmpeg::init().ok();
+        let dir =
+            std::env::temp_dir().join(format!("recording_encode_test_{}", std::process::id()));
+        fs::remove_dir_all(&dir).ok();
+        fs::create_dir_all(&dir).unwrap();
+        let recording_path = dir.join("recording");
+        let recording = crate::RecordingConfig::new(recording_path.to_string_lossy(), 300)
+            .with_encode(crate::RecordingEncodeConfig {
+                width: 160,
+                height: 120,
+                video_codec: "libx264".to_string(),
+                video_options: crate::video_option_defaults("libx264"),
+                audio_codec: "aac".to_string(),
+                audio_bitrate: 96_000,
+            });
+        let cfg = OutputConfig::new(320, 240, 25, 44_100).with_recording(Some(recording));
+        let mut output = EncodedOutput::open(
+            dir.join("stream.ts").to_str().unwrap(),
+            &cfg,
+            EncodedFormat::Stream {
+                muxer: "mpegts".to_string(),
+            },
+        )
+        .unwrap();
+
+        let recording_scaler = output
+            .transcoded_recording
+            .as_ref()
+            .and_then(|recording| recording.video_streams.first())
+            .and_then(|stream| stream.scaler.as_ref())
+            .expect("recording resolution should require a scaler");
+        assert_eq!(
+            (
+                recording_scaler.input().width,
+                recording_scaler.input().height
+            ),
+            (320, 240)
+        );
+        assert_eq!(
+            (
+                recording_scaler.output().width,
+                recording_scaler.output().height
+            ),
+            (160, 120)
+        );
+
+        for index in 0..25 {
+            let mut video = frame::Video::new(Pixel::YUV420P, 320, 240);
+            video.set_pts(Some(index));
+            video.data_mut(0).fill(16);
+            video.data_mut(1).fill(128);
+            video.data_mut(2).fill(128);
+            output.encode_video(&video).unwrap();
+            let mut audio = frame::Audio::new(
+                Sample::F32(ffmpeg::format::sample::Type::Planar),
+                output.audio_frame_size(),
+                ChannelLayout::STEREO,
+            );
+            audio.set_rate(44_100);
+            audio.set_pts(Some(index * output.audio_frame_size() as i64));
+            for channel in 0..2 {
+                audio.plane_mut::<f32>(channel).fill(0.0);
+            }
+            output.encode_audio(&audio).unwrap();
+        }
+        output.finish().unwrap();
+        let segments = fs::read_dir(&recording_path)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert!(!segments.is_empty());
+        assert!(segments.iter().all(|name| !name.contains('%')));
         fs::remove_dir_all(&dir).ok();
     }
 

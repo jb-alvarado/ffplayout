@@ -4,6 +4,7 @@ use std::{error::Error, fmt};
 pub(crate) mod desktop;
 mod encoded;
 mod hls;
+mod recording;
 mod vtt;
 
 pub use hls::resolved_variant_playlist_path;

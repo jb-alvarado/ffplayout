@@ -25,6 +25,7 @@ export const useConfig = defineStore('config', {
             srt: { video: [], audio: [] },
             udp: { video: [], audio: [] },
             custom: { video: [], audio: [] },
+            recording: { video: [], audio: [] },
         } as PlayoutCodecOptions,
         currentUser: 0,
         configUser: {} as User,

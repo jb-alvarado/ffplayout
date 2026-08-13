@@ -1,5 +1,5 @@
 use sqlx::{
-    Executor, Sqlite,
+    Executor, Sqlite, SqliteConnection,
     sqlite::{SqlitePool, SqliteQueryResult},
 };
 
@@ -68,6 +68,17 @@ pub async fn update_configuration(
     id: i32,
     config: PlayoutConfig,
 ) -> Result<SqliteQueryResult, ProcessError> {
+    let mut transaction = pool.begin().await?;
+    let result = update_configuration_on(&mut transaction, id, config).await?;
+    transaction.commit().await?;
+    Ok(result)
+}
+
+pub async fn update_configuration_on(
+    connection: &mut SqliteConnection,
+    id: i32,
+    config: PlayoutConfig,
+) -> Result<SqliteQueryResult, ProcessError> {
     const QUERY: &str = "UPDATE configurations SET general_stop_threshold = $2, mail_subject = $3, mail_recipient = $4, mail_level = $5, mail_interval = $6, logging_ffmpeg_level = $7, logging_ingest_level = $8, logging_detect_silence = $9, logging_ignore = $10, processing_mode = $11, processing_add_logo = $12, processing_logo = $13, processing_logo_scale = $14, processing_logo_opacity = $15, processing_logo_position = $16, processing_vtt_enable = $17, processing_vtt_dummy = $18, processing_vtt_name = $19, processing_vtt_language = $20, processing_vtt_default = $21, ingest_enable = $22, ingest_url = $23, playlist_day_start = $24, playlist_length = $25, playlist_infinit = $26, storage_filler = $27, storage_extensions = $28, storage_shuffle = $29, text_preset_id = $30, task_enable = $31, task_path = $32, output_id = $33 WHERE id = $1";
 
     let result = sqlx::query(QUERY)
@@ -104,7 +115,7 @@ pub async fn update_configuration(
         .bind(config.task.enable)
         .bind(config.task.path.to_string_lossy().to_string())
         .bind(config.output.id)
-        .execute(pool)
+        .execute(&mut *connection)
         .await?;
 
     sqlx::query("UPDATE audio_config SET volume = $2, live_loudness_enable = $3, live_loudness_target_lufs = $4, live_loudness_dead_band_lu = $5, live_loudness_max_gain_db = $6, live_loudness_max_attenuation_db = $7, live_loudness_gain_up_db_per_second = $8, live_loudness_gain_down_db_per_second = $9, live_loudness_silence_gate_lufs = $10, live_loudness_true_peak_ceiling_dbtp = $11 WHERE channel_id = (SELECT channel_id FROM configurations WHERE id = $1)")
@@ -119,7 +130,7 @@ pub async fn update_configuration(
         .bind(config.audio.live_loudness_gain_down_db_per_second)
         .bind(config.audio.live_loudness_silence_gate_lufs)
         .bind(config.audio.live_loudness_true_peak_ceiling_dbtp)
-        .execute(pool)
+        .execute(&mut *connection)
         .await?;
 
     Ok(result)

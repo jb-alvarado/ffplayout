@@ -3,7 +3,8 @@ use std::{
     collections::VecDeque,
     sync::{
         Arc, Mutex, PoisonError,
-        mpsc::{Receiver, SyncSender, TryRecvError, sync_channel},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        mpsc::{Receiver, SyncSender, TryRecvError, TrySendError, sync_channel},
     },
     thread as std_thread,
     time::{Duration, Instant},
@@ -23,7 +24,7 @@ use winit::{
     window::{Fullscreen, Icon, Window, WindowId},
 };
 
-use super::{FrameOutput, PlaybackStopped, vtt};
+use super::{EncodedOutput, FrameOutput, PlaybackStopped, vtt};
 use crate::{
     analysis::{
         audio_level::{AudioLevelCallback, AudioLevelMeter},
@@ -31,7 +32,7 @@ use crate::{
     },
     audio_mixer::{AudioEffectChain, AudioEffectsControl},
     benchmark::{self, BenchHandle, Stage},
-    compositor::logo::LogoOverlay,
+    compositor::logo::{LogoOverlay, blend_logo},
     utils::config::{DesktopControlCallback, DesktopControlCommand, OutputConfig},
 };
 
@@ -72,6 +73,8 @@ const VIDEO_STARVATION_GRACE_FRAMES: i64 = 2;
 const SCHEDULER_INTERVAL: Duration = Duration::from_millis(2);
 const VIDEO_CHANNEL_CAPACITY: usize = 8;
 const AUDIO_CHANNEL_CAPACITY: usize = 32;
+const RECORDING_CHANNEL_CAPACITY: usize = 64;
+const RECORDING_OVERLOAD_LOG_INTERVAL: Duration = Duration::from_secs(30);
 const DESKTOP_DOUBLE_CLICK_INTERVAL: Duration = Duration::from_millis(500);
 
 const DESKTOP_WINDOW_TITLE: &str = "ffplayout";
@@ -119,6 +122,8 @@ pub(super) struct DesktopOutput {
     audio_level_callback: Option<AudioLevelCallback>,
     loudness_meter_control: crate::LoudnessMeterControl,
     audio_sample_rate: u32,
+    recording: Option<DesktopRecording>,
+    channel_id: Option<i32>,
 }
 
 enum DesktopControlMessage {
@@ -163,10 +168,141 @@ pub(crate) struct DesktopFrameSender {
     audio_level_meter: AudioLevelMeter,
     loudness_meter: LoudnessMeter,
     current_logo_opacity: f64,
+    recording_sender: Option<SyncSender<DesktopRecordingMessage>>,
+    recording_active: Option<Arc<AtomicBool>>,
+    recording_queue_depth: Option<Arc<AtomicUsize>>,
+    recording_logo: Option<Arc<LogoOverlay>>,
+    recording_dropped_messages: u64,
+    recording_last_overload_log: Option<Instant>,
+    channel_id: i32,
+}
+
+struct DesktopRecording {
+    sender: SyncSender<DesktopRecordingMessage>,
+    worker: std_thread::JoinHandle<()>,
+    active: Arc<AtomicBool>,
+    queue_depth: Arc<AtomicUsize>,
+}
+
+enum DesktopRecordingMessage {
+    Video {
+        frame: frame::Video,
+        logo: Option<Arc<LogoOverlay>>,
+        logo_opacity: f64,
+    },
+    Audio(frame::Audio),
+    Finish,
+}
+
+impl DesktopRecording {
+    fn open(cfg: &OutputConfig, recording_config: &crate::RecordingConfig) -> Result<Self> {
+        let (sender, receiver) = sync_channel(RECORDING_CHANNEL_CAPACITY);
+        let (ready_sender, ready_receiver) = sync_channel(1);
+        let cfg = cfg.clone();
+        let recording_config = recording_config.clone();
+        let channel_id = cfg.channel_id.unwrap_or_default();
+        let active = Arc::new(AtomicBool::new(true));
+        let worker_active = Arc::clone(&active);
+        let queue_depth = Arc::new(AtomicUsize::new(0));
+        let worker_queue_depth = Arc::clone(&queue_depth);
+        let worker = std_thread::Builder::new()
+            .name("ffplayout-desktop-recording".to_string())
+            .spawn(move || {
+                let mut output = match EncodedOutput::open_recording(&cfg, &recording_config) {
+                    Ok(output) => {
+                        let _ = ready_sender.send(Ok(()));
+                        output
+                    }
+                    Err(error) => {
+                        let _ = ready_sender.send(Err(error.to_string()));
+                        return;
+                    }
+                };
+                while let Ok(message) = receiver.recv() {
+                    let result = match message {
+                        DesktopRecordingMessage::Video {
+                            mut frame,
+                            logo,
+                            logo_opacity,
+                        } => {
+                            worker_queue_depth.fetch_sub(1, Ordering::AcqRel);
+                            if let Some(logo) = logo {
+                                // A referenced frame is read-only across threads. Make the
+                                // full copy in this worker only when compositing is required.
+                                let mut composited = frame.clone();
+                                blend_logo(&mut composited, &logo, logo_opacity);
+                                frame = composited;
+                            }
+                            output.encode_video(&frame)
+                        }
+                        DesktopRecordingMessage::Audio(frame) => {
+                            worker_queue_depth.fetch_sub(1, Ordering::AcqRel);
+                            output.encode_audio(&frame)
+                        }
+                        DesktopRecordingMessage::Finish => break,
+                    };
+                    if let Err(error) = result {
+                        worker_active.store(false, Ordering::Release);
+                        log::error!(channel = channel_id; "Recording disabled: {error}");
+                        return;
+                    }
+                    if !worker_active.load(Ordering::Acquire) {
+                        break;
+                    }
+                }
+                if let Err(error) = output.finish() {
+                    log::error!(channel = channel_id; "Recording disabled: {error}");
+                }
+            })
+            .map_err(|error| anyhow!("failed to start desktop recording worker: {error}"))?;
+
+        match ready_receiver.recv() {
+            Ok(Ok(())) => Ok(Self {
+                sender,
+                worker,
+                active,
+                queue_depth,
+            }),
+            Ok(Err(error)) => {
+                let _ = worker.join();
+                Err(anyhow!(error))
+            }
+            Err(_) => {
+                let _ = worker.join();
+                Err(anyhow!(
+                    "desktop recording worker stopped during initialization"
+                ))
+            }
+        }
+    }
+
+    fn finish(self) {
+        let Self {
+            sender,
+            worker,
+            active,
+            queue_depth: _,
+        } = self;
+        // Do not make an output switch wait for decoded frames which have not
+        // reached the recording encoder yet. The worker finishes its current
+        // message and then writes the trailer.
+        active.store(false, Ordering::Release);
+        match sender.try_send(DesktopRecordingMessage::Finish) {
+            Ok(()) | Err(TrySendError::Disconnected(_)) => {}
+            Err(TrySendError::Full(_)) => {
+                // Dropping the final sender lets the worker drain queued frames
+                // before it closes the muxer and writes the trailer.
+            }
+        }
+        drop(sender);
+        if worker.join().is_err() {
+            log::warn!("desktop recording worker panicked");
+        }
+    }
 }
 
 struct DesktopRenderer {
-    window: DesktopWindowHandle,
+    window: Option<DesktopWindowHandle>,
     audio: DesktopAudio,
     audio_effects_control: AudioEffectsControl,
     video_queue: VecDeque<frame::Video>,
@@ -210,8 +346,22 @@ thread_local! {
 
 impl DesktopOutput {
     pub(super) fn open(cfg: &OutputConfig) -> Result<Self> {
+        let renderer = DesktopRenderer::open(cfg)?;
+        let recording = cfg.recording.as_ref().and_then(|recording_config| {
+            if recording_config.encode.is_none() {
+                log::error!(channel = cfg.channel_id.unwrap_or_default(); "Recording disabled: desktop output requires dedicated recording encode settings");
+                return None;
+            }
+            match DesktopRecording::open(cfg, recording_config) {
+                Ok(recording) => Some(recording),
+                Err(error) => {
+                    log::error!(channel = cfg.channel_id.unwrap_or_default(); "Recording disabled: {error}");
+                    None
+                }
+            }
+        });
         Ok(Self {
-            renderer: DesktopRenderer::open(cfg)?,
+            renderer,
             audio_effects: Arc::new(Mutex::new(AudioEffectChain::new(
                 cfg.audio_effects.clone(),
                 cfg.sample_rate,
@@ -219,6 +369,8 @@ impl DesktopOutput {
             audio_level_callback: cfg.audio_level_callback.clone(),
             loudness_meter_control: cfg.loudness_meter_control.clone(),
             audio_sample_rate: cfg.sample_rate,
+            recording,
+            channel_id: cfg.channel_id,
         })
     }
 
@@ -252,6 +404,19 @@ impl DesktopOutput {
         let loudness_meter_control = self.loudness_meter_control.clone();
         let audio_sample_rate = self.audio_sample_rate;
         let worker_benchmark = benchmark.clone();
+        let recording_sender = self
+            .recording
+            .as_ref()
+            .map(|recording| recording.sender.clone());
+        let recording_active = self
+            .recording
+            .as_ref()
+            .map(|recording| Arc::clone(&recording.active));
+        let recording_queue_depth = self
+            .recording
+            .as_ref()
+            .map(|recording| Arc::clone(&recording.queue_depth));
+        let channel_id = self.channel_id.unwrap_or_default();
         let worker = std_thread::Builder::new()
             .name("ffplayout-decode".to_string())
             .spawn(move || {
@@ -268,6 +433,13 @@ impl DesktopOutput {
                     ),
                     loudness_meter: LoudnessMeter::new(audio_sample_rate, loudness_meter_control),
                     current_logo_opacity: 0.0,
+                    recording_sender,
+                    recording_active,
+                    recording_queue_depth,
+                    recording_logo: None,
+                    recording_dropped_messages: 0,
+                    recording_last_overload_log: None,
+                    channel_id,
                 };
                 let _ = output
                     .control_sender
@@ -312,8 +484,15 @@ impl DesktopOutput {
         Ok(worker_result)
     }
 
-    pub(super) fn finish(self) -> Result<()> {
-        self.renderer.finish()
+    pub(super) fn finish(mut self) -> Result<()> {
+        let recording = self.recording.take();
+        // Finish and drop the renderer first. Its Drop implementation destroys
+        // the native window before a recording worker is joined.
+        let renderer_result = self.renderer.finish();
+        if let Some(recording) = recording {
+            recording.finish();
+        }
+        renderer_result
     }
 }
 
@@ -323,22 +502,45 @@ impl FrameOutput for DesktopFrameSender {
     }
 
     fn encode_video(&mut self, frame: &frame::Video) -> Result<()> {
-        benchmark::measure(Stage::DesktopSend, || {
+        let recording_slot = self.reserve_recording_slot();
+        let desktop_send = benchmark::measure(Stage::DesktopSend, || {
             self.video_sender.send(DesktopVideoMessage {
                 frame: frame.clone(),
                 logo_opacity: self.current_logo_opacity,
             })
-        })
-        .map_err(|_| PlaybackStopped.into())
+        });
+        if desktop_send.is_err() {
+            if recording_slot {
+                self.release_recording_slot();
+            }
+            return Err(PlaybackStopped.into());
+        }
+        if recording_slot {
+            match reference_video_frame(frame) {
+                Ok(frame) => self.send_reserved_recording(DesktopRecordingMessage::Video {
+                    frame,
+                    logo: self.recording_logo.clone(),
+                    logo_opacity: self.current_logo_opacity,
+                }),
+                Err(error) => {
+                    self.release_recording_slot();
+                    log::warn!(channel = self.channel_id; "Skipping desktop recording frame: {error}");
+                }
+            }
+        }
+        Ok(())
     }
 
     fn apply_logo_overlay(
         &mut self,
         _frame: &mut frame::Video,
-        _logo: &LogoOverlay,
+        logo: &LogoOverlay,
         opacity_factor: f64,
     ) {
         self.current_logo_opacity = opacity_factor;
+        if self.recording_sender.is_some() && self.recording_logo.is_none() {
+            self.recording_logo = Some(Arc::new(logo.clone()));
+        }
     }
 
     fn benchmarks_logo_overlay(&self) -> bool {
@@ -350,23 +552,25 @@ impl FrameOutput for DesktopFrameSender {
             return Ok(());
         }
 
-        let (samples, samples_per_channel) = benchmark::measure(Stage::AudioProcess, || {
-            let mut frame = frame.clone();
-            self.audio_effects
-                .lock()
-                .map_err(|_| anyhow!("audio effect chain lock poisoned"))?
-                .process(&mut frame);
-            self.audio_level_meter.process_frame(&frame);
-            self.loudness_meter.process_frame(&frame);
-            let left = frame.plane::<f32>(0);
-            let right = frame.plane::<f32>(1);
-            let mut interleaved = Vec::with_capacity(frame.samples() * AUDIO_CHANNELS);
-            for (left, right) in left.iter().zip(right) {
-                interleaved.push(if left.is_finite() { *left } else { 0.0 });
-                interleaved.push(if right.is_finite() { *right } else { 0.0 });
-            }
-            Ok::<_, anyhow::Error>((interleaved, frame.samples()))
-        })?;
+        let (samples, samples_per_channel, recording_frame) =
+            benchmark::measure(Stage::AudioProcess, || {
+                let mut frame = frame.clone();
+                self.audio_effects
+                    .lock()
+                    .map_err(|_| anyhow!("audio effect chain lock poisoned"))?
+                    .process(&mut frame);
+                self.audio_level_meter.process_frame(&frame);
+                self.loudness_meter.process_frame(&frame);
+                let left = frame.plane::<f32>(0);
+                let right = frame.plane::<f32>(1);
+                let mut interleaved = Vec::with_capacity(frame.samples() * AUDIO_CHANNELS);
+                for (left, right) in left.iter().zip(right) {
+                    interleaved.push(if left.is_finite() { *left } else { 0.0 });
+                    interleaved.push(if right.is_finite() { *right } else { 0.0 });
+                }
+                let samples = frame.samples();
+                Ok::<_, anyhow::Error>((interleaved, samples, frame))
+            })?;
 
         benchmark::measure(Stage::DesktopSend, || {
             self.audio_sender
@@ -374,8 +578,12 @@ impl FrameOutput for DesktopFrameSender {
                     samples,
                     samples_per_channel,
                 })
-                .map_err(|_| PlaybackStopped.into())
-        })
+                .map_err(|_| anyhow::Error::new(PlaybackStopped))
+        })?;
+        if self.reserve_recording_slot() {
+            self.send_reserved_recording(DesktopRecordingMessage::Audio(recording_frame));
+        }
+        Ok(())
     }
 
     fn reset_after_skip(&mut self, video_pts: i64, audio_pts: i64) -> Result<bool> {
@@ -441,7 +649,97 @@ impl FrameOutput for DesktopFrameSender {
     }
 }
 
+impl DesktopFrameSender {
+    fn reserve_recording_slot(&mut self) -> bool {
+        let active = self
+            .recording_active
+            .as_ref()
+            .is_some_and(|active| active.load(Ordering::Acquire));
+        if !active {
+            self.recording_sender = None;
+            return false;
+        }
+        if self.recording_sender.is_none() {
+            return false;
+        }
+        let Some(queue_depth) = &self.recording_queue_depth else {
+            return false;
+        };
+
+        if queue_depth
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |depth| {
+                (depth < RECORDING_CHANNEL_CAPACITY).then_some(depth + 1)
+            })
+            .is_err()
+        {
+            self.report_recording_overload();
+            return false;
+        }
+        true
+    }
+
+    fn release_recording_slot(&self) {
+        if let Some(queue_depth) = &self.recording_queue_depth {
+            queue_depth.fetch_sub(1, Ordering::AcqRel);
+        }
+    }
+
+    fn send_reserved_recording(&mut self, message: DesktopRecordingMessage) {
+        let Some(sender) = &self.recording_sender else {
+            self.release_recording_slot();
+            return;
+        };
+        match sender.try_send(message) {
+            Ok(()) => {}
+            Err(TrySendError::Full(_)) => {
+                self.release_recording_slot();
+                self.report_recording_overload();
+            }
+            Err(TrySendError::Disconnected(_)) => {
+                self.release_recording_slot();
+                self.recording_sender = None;
+                if self
+                    .recording_active
+                    .as_ref()
+                    .is_some_and(|active| active.swap(false, Ordering::AcqRel))
+                {
+                    log::error!(channel = self.channel_id; "Recording disabled: desktop recording worker stopped unexpectedly");
+                }
+            }
+        }
+    }
+
+    fn report_recording_overload(&mut self) {
+        self.recording_dropped_messages = self.recording_dropped_messages.saturating_add(1);
+        let now = Instant::now();
+        let should_log = self.recording_last_overload_log.is_none_or(|last| {
+            now.saturating_duration_since(last) >= RECORDING_OVERLOAD_LOG_INTERVAL
+        });
+        if should_log {
+            log::warn!(channel = self.channel_id; "Desktop recording encoder is behind; dropped {} recording frame(s) without blocking playback", self.recording_dropped_messages);
+            self.recording_dropped_messages = 0;
+            self.recording_last_overload_log = Some(now);
+        }
+    }
+}
+
+fn reference_video_frame(source: &frame::Video) -> Result<frame::Video> {
+    let mut referenced = frame::Video::empty();
+    let result =
+        unsafe { ffmpeg_next::ffi::av_frame_ref(referenced.as_mut_ptr(), source.as_ptr()) };
+    if result < 0 {
+        return Err(ffmpeg_next::Error::from(result).into());
+    }
+    Ok(referenced)
+}
+
 impl DesktopRenderer {
+    fn window(&self) -> &DesktopWindowHandle {
+        self.window
+            .as_ref()
+            .expect("desktop window handle must exist while rendering")
+    }
+
     fn open(cfg: &OutputConfig) -> Result<Self> {
         let window = prepare_desktop_window(cfg.width, cfg.height, cfg.desktop_fullscreen)?;
         let audio = DesktopAudio::open(cfg.sample_rate)?;
@@ -453,7 +751,7 @@ impl DesktopRenderer {
             .transpose()?;
 
         Ok(Self {
-            window,
+            window: Some(window),
             audio,
             audio_effects_control: cfg.audio_effects.clone(),
             video_queue: VecDeque::with_capacity(VIDEO_CHANNEL_CAPACITY),
@@ -893,7 +1191,7 @@ impl DesktopRenderer {
         if !thread::is_running() {
             pump_desktop_window_events();
         }
-        let actions = self.window.take_actions();
+        let actions = self.window().take_actions();
         let mut refresh = self
             .volume_overlay_until
             .is_some_and(|until| Instant::now() >= until);
@@ -913,7 +1211,7 @@ impl DesktopRenderer {
                         self.help_bitmap = None;
                         refresh = true;
                     }
-                    if !self.window.fullscreen() && width > 0 && height > 0 {
+                    if !self.window().fullscreen() && width > 0 && height > 0 {
                         self.pending_aspect_resize = Some((width, height, Instant::now()));
                     }
                 }
@@ -983,7 +1281,7 @@ impl DesktopRenderer {
         };
         self.last_window_size = target;
         if target != (width, height) {
-            self.window.request_size(target.0, target.1);
+            self.window().request_size(target.0, target.1);
         }
     }
 
@@ -1001,7 +1299,7 @@ impl DesktopRenderer {
         });
         let volume_overlay = self.volume_overlay_until.is_some();
         let help = self.help_bitmap();
-        self.window.set_frame(WindowFrame {
+        self.window().set_frame(WindowFrame {
             video: self.last_video.clone(),
             subtitle,
             logo,
@@ -1016,7 +1314,7 @@ impl DesktopRenderer {
             return None;
         }
         if self.help_bitmap.is_none() {
-            let (size, large) = self.window.size_and_large_subtitles();
+            let (size, large) = self.window().size_and_large_subtitles();
             self.help_bitmap = create_help_bitmap(size.0, large)
                 .map_err(|error| log::warn!("failed to render desktop help: {error}"))
                 .ok()
@@ -1031,7 +1329,7 @@ impl DesktopRenderer {
         if self.active_subtitle_text.as_deref() != text.as_deref() {
             self.active_subtitle_text = text.clone();
             self.subtitle_bitmap = text.and_then(|text| {
-                let (size, large) = self.window.size_and_large_subtitles();
+                let (size, large) = self.window().size_and_large_subtitles();
                 create_subtitle_bitmap(&text, size.0, large)
                     .map_err(|error| log::warn!("failed to render desktop subtitle: {error}"))
                     .ok()
@@ -1055,16 +1353,15 @@ impl DesktopRenderer {
 
 impl Drop for DesktopRenderer {
     fn drop(&mut self) {
-        // Winit permits only one event loop per process. Keep the thread-local
-        // window and its event loop alive across channel restarts, but hide it
-        // until the next desktop session reconfigures and shows it again.
-        hide_desktop_window();
+        if let Some(handle) = self.window.take() {
+            close_desktop_window(handle);
+        }
     }
 }
 
 struct DesktopWindow {
     event_loop: EventLoop<()>,
-    app: DesktopWindowApp,
+    app: Option<DesktopWindowApp>,
 }
 
 #[derive(Clone)]
@@ -1097,6 +1394,15 @@ struct DesktopWindowApp {
     occluded: bool,
     last_primary_click: Option<Instant>,
 }
+
+struct DesktopWindowCreator {
+    width: u32,
+    height: u32,
+    fullscreen: bool,
+    result: Option<Result<DesktopWindowApp>>,
+}
+
+struct DesktopWindowIdle;
 
 fn prepare_desktop_window(
     width: u32,
@@ -1148,18 +1454,27 @@ pub(super) fn release_desktop_window() {
     });
 }
 
-fn hide_desktop_window() {
-    let hide = || {
+fn close_desktop_window(handle: DesktopWindowHandle) {
+    let close = move || {
         DESKTOP_WINDOW.with(|window| {
             if let Some(window) = window.borrow_mut().as_mut() {
                 window.hide();
             }
         });
+        // DesktopRenderer also owns a Window reference. Release it in this
+        // closure so the final native Window drop always happens on the host
+        // thread together with Winit and WGPU state.
+        drop(handle);
     };
     if thread::is_running() {
-        let _ = thread::call(hide);
+        // Renderer teardown can originate from the playout worker while the
+        // host thread is still dispatching window events. Queue the teardown,
+        // but do not make the playout worker wait for the host thread.
+        if let Err(error) = thread::spawn(close) {
+            log::warn!("failed to schedule desktop window close: {error}");
+        }
     } else {
-        hide();
+        close();
     }
 }
 
@@ -1173,133 +1488,181 @@ enum WindowAction {
     ToggleHelp,
 }
 
+fn create_desktop_window_app(
+    event_loop: &ActiveEventLoop,
+    width: u32,
+    height: u32,
+    fullscreen: bool,
+) -> Result<DesktopWindowApp> {
+    let attributes = Window::default_attributes()
+        .with_title(DESKTOP_WINDOW_TITLE)
+        .with_window_icon(Some(desktop_window_icon()?))
+        .with_inner_size(LogicalSize::new(f64::from(width), f64::from(height)))
+        .with_resizable(true)
+        .with_visible(false)
+        .with_fullscreen(fullscreen.then_some(Fullscreen::Borderless(None)));
+    // Wayland uses this as the application ID; X11 uses it as the window class.
+    // Both let desktop shells associate this window with ffplayout instead of "Unknown".
+    #[cfg(target_os = "linux")]
+    let attributes = WindowAttributesExtWayland::with_name(
+        attributes,
+        DESKTOP_APPLICATION_ID,
+        DESKTOP_APPLICATION_ID,
+    );
+    #[cfg(target_os = "linux")]
+    let attributes = WindowAttributesExtX11::with_name(
+        attributes,
+        DESKTOP_APPLICATION_ID,
+        DESKTOP_APPLICATION_ID,
+    );
+    let window = Arc::new(
+        event_loop
+            .create_window(attributes)
+            .context("creating desktop window")?,
+    );
+    let size = window.inner_size();
+    let shared = Arc::new(Mutex::new(DesktopWindowShared {
+        actions: Vec::new(),
+        frame: Some(WindowFrame::default()),
+        size: (size.width, size.height),
+        fullscreen,
+        maximized: false,
+        requested_size: None,
+    }));
+    let mut renderer = WindowRenderer::new(
+        Arc::clone(&window),
+        event_loop.owned_display_handle(),
+        width,
+        height,
+    )?;
+    renderer.resize_surface(size.width, size.height)?;
+
+    let app = DesktopWindowApp {
+        window,
+        renderer,
+        shared,
+        size: (size.width, size.height),
+        occluded: false,
+        last_primary_click: None,
+    };
+    app.window.set_visible(true);
+    Ok(app)
+}
+
 impl DesktopWindow {
     fn open(width: u32, height: u32, fullscreen: bool) -> Result<Self> {
         let mut event_loop_builder = EventLoop::<()>::builder();
         let event_loop = event_loop_builder
             .build()
             .context("creating desktop window event loop")?;
-        let attributes = Window::default_attributes()
-            .with_title(DESKTOP_WINDOW_TITLE)
-            .with_window_icon(Some(desktop_window_icon()?))
-            .with_inner_size(LogicalSize::new(f64::from(width), f64::from(height)))
-            .with_resizable(true)
-            .with_visible(false)
-            .with_fullscreen(fullscreen.then_some(Fullscreen::Borderless(None)));
-        // Wayland uses this as the application ID; X11 uses it as the window class.
-        // Both let desktop shells associate this window with ffplayout instead of "Unknown".
-        #[cfg(target_os = "linux")]
-        let attributes = WindowAttributesExtWayland::with_name(
-            attributes,
-            DESKTOP_APPLICATION_ID,
-            DESKTOP_APPLICATION_ID,
-        );
-        #[cfg(target_os = "linux")]
-        let attributes = WindowAttributesExtX11::with_name(
-            attributes,
-            DESKTOP_APPLICATION_ID,
-            DESKTOP_APPLICATION_ID,
-        );
-        #[allow(deprecated)]
-        let window = Arc::new(
-            event_loop
-                .create_window(attributes)
-                .context("creating desktop window")?,
-        );
-        let size = window.inner_size();
-        let shared = Arc::new(Mutex::new(DesktopWindowShared {
-            actions: Vec::new(),
-            frame: Some(WindowFrame::default()),
-            size: (size.width, size.height),
-            fullscreen,
-            maximized: false,
-            requested_size: None,
-        }));
-        let mut renderer = WindowRenderer::new(
-            Arc::clone(&window),
-            event_loop.owned_display_handle(),
+        let mut window = Self {
+            event_loop,
+            app: None,
+        };
+        window.create_app(width, height, fullscreen)?;
+        Ok(window)
+    }
+
+    fn create_app(&mut self, width: u32, height: u32, fullscreen: bool) -> Result<()> {
+        let mut creator = DesktopWindowCreator {
             width,
             height,
-        )?;
-        renderer.resize_surface(size.width, size.height)?;
-
-        let desktop_window = Self {
-            event_loop,
-            app: DesktopWindowApp {
-                window,
-                renderer,
-                shared,
-                size: (size.width, size.height),
-                occluded: false,
-                last_primary_click: None,
-            },
+            fullscreen,
+            result: None,
         };
-        desktop_window.app.window.set_visible(true);
-        desktop_window.app.window.request_redraw();
-        Ok(desktop_window)
+        for _ in 0..3 {
+            let _ = self
+                .event_loop
+                .pump_app_events(Some(Duration::from_millis(10)), &mut creator);
+            if creator.result.is_some() {
+                break;
+            }
+        }
+        let app = creator
+            .result
+            .context("desktop event loop did not create a window")??;
+        app.window.request_redraw();
+        self.app = Some(app);
+        Ok(())
     }
 
     fn reconfigure(&mut self, width: u32, height: u32, fullscreen: bool) -> Result<()> {
+        if self.app.is_none() {
+            return self.create_app(width, height, fullscreen);
+        }
+        let app = self
+            .app
+            .as_mut()
+            .expect("desktop window app was checked above");
         {
-            let mut shared = self
-                .app
-                .shared
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
+            let mut shared = app.shared.lock().unwrap_or_else(PoisonError::into_inner);
             shared.frame = Some(WindowFrame::default());
             shared.actions.clear();
             shared.fullscreen = fullscreen;
             shared.maximized = false;
             shared.requested_size = None;
         }
-        self.app.occluded = false;
-        self.app.renderer.reset_frame_cache();
-        self.app.window.set_fullscreen(
-            fullscreen.then(|| Fullscreen::Borderless(self.app.window.current_monitor())),
+        app.occluded = false;
+        app.renderer.reset_frame_cache();
+        app.window.set_fullscreen(
+            fullscreen.then(|| Fullscreen::Borderless(app.window.current_monitor())),
         );
 
         if width > 0 && height > 0 {
-            self.app.renderer.resize_buffer(width, height)?;
+            app.renderer.resize_buffer(width, height)?;
         }
 
         if !fullscreen && width > 0 && height > 0 {
-            self.app.size = (width, height);
-            self.app
-                .shared
+            app.size = (width, height);
+            app.shared
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .size = (width, height);
-            self.app.renderer.resize_surface(width, height)?;
-            let _ = self
-                .app
+            app.renderer.resize_surface(width, height)?;
+            let _ = app
                 .window
                 .request_inner_size(PhysicalSize::new(width, height));
         }
-        self.app.window.set_visible(true);
-        self.app.window.request_redraw();
+        app.window.set_visible(true);
+        app.window.request_redraw();
         Ok(())
     }
 
     fn hide(&mut self) {
-        self.app
-            .shared
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .frame = None;
-        self.app.renderer.release_frame_resources();
-        self.app.window.set_visible(false);
+        if let Some(mut app) = self.app.take() {
+            app.shared
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .frame = None;
+            app.renderer.release_frame_resources();
+            // Wayland ignores set_visible(false), so destroy the native window
+            // and renderer. The EventLoop remains available for a later session.
+            drop(app);
+        }
     }
 
     fn pump_events(&mut self) {
-        let _ = self
-            .event_loop
-            .pump_app_events(Some(Duration::ZERO), &mut self.app);
+        if let Some(app) = self.app.as_mut() {
+            let _ = self.event_loop.pump_app_events(Some(Duration::ZERO), app);
+        } else {
+            // Winit still needs to dispatch lifecycle events after the native
+            // window has been dropped. In particular, Wayland may otherwise
+            // leave the destroyed surface pending until another window opens.
+            let mut idle = DesktopWindowIdle;
+            let _ = self
+                .event_loop
+                .pump_app_events(Some(Duration::ZERO), &mut idle);
+        }
     }
 
     fn handle(&self) -> DesktopWindowHandle {
+        let app = self
+            .app
+            .as_ref()
+            .expect("desktop window must exist before creating a handle");
         DesktopWindowHandle {
-            window: Arc::clone(&self.app.window),
-            shared: Arc::clone(&self.app.shared),
+            window: Arc::clone(&app.window),
+            shared: Arc::clone(&app.shared),
         }
     }
 }
@@ -1372,6 +1735,49 @@ impl DesktopWindowApp {
             shared.fullscreen = fullscreen;
             shared.actions.push(WindowAction::FullscreenChanged);
         }
+    }
+}
+
+impl DesktopWindowCreator {
+    fn create(&mut self, event_loop: &ActiveEventLoop) {
+        if self.result.is_none() {
+            self.result = Some(create_desktop_window_app(
+                event_loop,
+                self.width,
+                self.height,
+                self.fullscreen,
+            ));
+        }
+    }
+}
+
+impl ApplicationHandler for DesktopWindowCreator {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        self.create(event_loop);
+    }
+
+    fn window_event(
+        &mut self,
+        _event_loop: &ActiveEventLoop,
+        _window_id: WindowId,
+        _event: WindowEvent,
+    ) {
+    }
+
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        self.create(event_loop);
+    }
+}
+
+impl ApplicationHandler for DesktopWindowIdle {
+    fn resumed(&mut self, _event_loop: &ActiveEventLoop) {}
+
+    fn window_event(
+        &mut self,
+        _event_loop: &ActiveEventLoop,
+        _window_id: WindowId,
+        _event: WindowEvent,
+    ) {
     }
 }
 
