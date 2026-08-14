@@ -108,6 +108,7 @@ pub enum FfmpegOutputTarget {
     Rtmp,
     Srt,
     Udp,
+    Matroska,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -197,7 +198,7 @@ fn detect_encoders() -> Vec<FfmpegCodec> {
 }
 
 fn detect_muxers() -> Vec<FfmpegMuxer> {
-    ["hls", "flv", "mpegts"]
+    ["hls", "flv", "mpegts", "matroska"]
         .into_iter()
         .filter_map(|name| {
             let muxer = muxer_for_name(name)?;
@@ -234,6 +235,7 @@ fn muxer_for_target(target: FfmpegOutputTarget) -> Option<&'static str> {
         FfmpegOutputTarget::Hls => Some("hls"),
         FfmpegOutputTarget::Rtmp => Some("flv"),
         FfmpegOutputTarget::Srt | FfmpegOutputTarget::Udp => Some("mpegts"),
+        FfmpegOutputTarget::Matroska => Some("matroska"),
     }
 }
 
@@ -348,6 +350,19 @@ mod tests {
     fn detects_hls_subtitle_name_support_from_avformat_version() {
         assert!(!supports_hls_subtitle_name(AvVersion::new(61, 7, 100)));
         assert!(supports_hls_subtitle_name(AvVersion::new(61, 9, 100)));
+    }
+
+    #[test]
+    fn matroska_codec_lists_only_contain_muxer_compatible_encoders() {
+        let capabilities = ffmpeg_capabilities();
+        assert!(capabilities.has_muxer(FfmpegOutputTarget::Matroska));
+        for codec in capabilities
+            .video_codecs_for(FfmpegOutputTarget::Matroska)
+            .into_iter()
+            .chain(capabilities.audio_codecs_for(FfmpegOutputTarget::Matroska))
+        {
+            assert!(super::muxer_supports_codec("matroska", codec.codec_id_raw));
+        }
     }
 
     #[test]

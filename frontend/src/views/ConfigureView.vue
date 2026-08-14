@@ -17,6 +17,7 @@ useHead({
 const isChannelRoute = computed(() => route.name === 'configure-channel')
 const isPlayoutRoute = computed(() => route.name === 'configure-playout')
 const isAudioRoute = computed(() => route.name === 'configure-audio')
+const isRecordingRoute = computed(() => route.name === 'configure-recording')
 const isUserRoute = computed(() => route.name === 'configure-user')
 const isGlobalRoute = computed(() => route.name === 'configure-global')
 const channelQuery = computed(() => ({ channel: route.query.channel }))
@@ -37,7 +38,7 @@ const channelQuery = computed(() => ({ channel: route.query.channel }))
                 class="join-item btn btn-sm btn-primary mt-1 duration-500"
                 :class="isPlayoutRoute && 'bg-base-100/40'"
             >
-                Playout
+                {{ t('config.playout') }}
             </RouterLink>
             <RouterLink
                 v-if="authStore.role !== 'user'"
@@ -45,7 +46,15 @@ const channelQuery = computed(() => ({ channel: route.query.channel }))
                 class="join-item btn btn-sm btn-primary mt-1 duration-500"
                 :class="isAudioRoute && 'bg-base-100/40'"
             >
-                Audio
+                {{ t('config.audio') }}
+            </RouterLink>
+            <RouterLink
+                v-if="authStore.role !== 'user'"
+                :to="{ name: 'configure-recording', query: channelQuery }"
+                class="join-item btn btn-sm btn-primary mt-1 duration-500"
+                :class="isRecordingRoute && 'bg-base-100/40'"
+            >
+                {{ t('config.recording') }}
             </RouterLink>
             <RouterLink
                 :to="{ name: 'configure-user', query: channelQuery }"

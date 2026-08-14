@@ -6,7 +6,7 @@ use ffmpeg_next::{
     software::{resampling, scaling},
     util::{channel_layout::ChannelLayout, format::pixel::Pixel, format::sample::Sample},
 };
-use log::{debug, trace};
+use log::{debug, trace, warn};
 
 use crate::{
     LogoFade, PlaybackControl,
@@ -20,6 +20,8 @@ use crate::{
 };
 
 const LOGO_FADE_SECONDS: f64 = 1.0;
+const MEDIA_FADE_SECONDS: f64 = 1.0;
+const MEDIA_DURATION_TOLERANCE_US: i64 = 500_000;
 const MIN_LOOP_REMAINING_SECONDS: f64 = 3.0;
 
 #[derive(Debug)]
@@ -237,6 +239,69 @@ pub(crate) struct InputPlaybackOptions<'a> {
     pub(crate) playback_control: &'a PlaybackControl,
 }
 
+#[derive(Clone, Copy, Default)]
+struct MediaFadePlan {
+    video_end_pts: Option<i64>,
+    audio_end_pts: Option<i64>,
+    video_frames: i64,
+    audio_samples: i64,
+}
+
+impl MediaFadePlan {
+    fn for_trimmed_clip(
+        requested_duration_us: Option<i64>,
+        seek_us: i64,
+        source_duration_us: Option<i64>,
+        timeline: &Timeline,
+        cfg: &OutputConfig,
+    ) -> Self {
+        let Some(requested_duration_us) = requested_duration_us else {
+            return Self::default();
+        };
+        let Some(source_duration_us) = source_duration_us else {
+            return Self::default();
+        };
+
+        let scheduled_out_us = seek_us.saturating_add(requested_duration_us);
+        if (scheduled_out_us - source_duration_us).abs() <= MEDIA_DURATION_TOLERANCE_US {
+            return Self::default();
+        }
+
+        Self {
+            video_end_pts: Some(
+                timeline.video_pts
+                    + div_ceil(
+                        i128::from(requested_duration_us) * i128::from(cfg.fps),
+                        1_000_000,
+                    ) as i64,
+            ),
+            audio_end_pts: Some(
+                timeline.audio_pts
+                    + div_ceil(
+                        i128::from(requested_duration_us) * i128::from(cfg.sample_rate),
+                        1_000_000,
+                    ) as i64,
+            ),
+            video_frames: (MEDIA_FADE_SECONDS * f64::from(cfg.fps)).round().max(1.0) as i64,
+            audio_samples: (MEDIA_FADE_SECONDS * f64::from(cfg.sample_rate))
+                .round()
+                .max(1.0) as i64,
+        }
+    }
+
+    fn video_opacity_at(self, pts: i64) -> f32 {
+        self.video_end_pts.map_or(1.0, |end_pts| {
+            ((end_pts - pts).max(0) as f64 / self.video_frames as f64).clamp(0.0, 1.0) as f32
+        })
+    }
+
+    fn audio_gain_at(self, pts: i64) -> f32 {
+        self.audio_end_pts.map_or(1.0, |end_pts| {
+            ((end_pts - pts).max(0) as f64 / self.audio_samples as f64).clamp(0.0, 1.0) as f32
+        })
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct LogoFadePlan {
     fade_in: bool,
@@ -313,15 +378,37 @@ pub(crate) fn play_opened_input<O: FrameOutput>(
 ) -> Result<()> {
     let seek_seconds = options.seek_seconds;
     let seek_us = seek_seconds.map(seconds_to_microseconds).unwrap_or(0);
+    let (has_video, has_audio, has_invalid_time_base) = {
+        let streams = ictx.streams();
+        let video_stream = streams.best(media::Type::Video);
+        let audio_stream = streams.best(media::Type::Audio);
+        let has_invalid_time_base = video_stream
+            .as_ref()
+            .is_some_and(|stream| !has_valid_time_base(stream.time_base()))
+            || audio_stream
+                .as_ref()
+                .is_some_and(|stream| !has_valid_time_base(stream.time_base()));
+        (
+            video_stream.is_some(),
+            audio_stream.is_some(),
+            has_invalid_time_base,
+        )
+    };
+    if !has_video && !has_audio {
+        return Err(anyhow!("{label} contains no audio or video stream"));
+    }
+
     if let Some(seek_seconds) = seek_seconds {
+        if has_invalid_time_base {
+            return Err(anyhow!(
+                "cannot seek {label}: its selected stream has an invalid time base"
+            ));
+        }
         seek_input(&mut ictx, seek_seconds)?;
     }
 
     let video_stream = ictx.streams().best(media::Type::Video);
     let audio_stream = ictx.streams().best(media::Type::Audio);
-    if video_stream.is_none() && audio_stream.is_none() {
-        return Err(anyhow!("{label} contains no audio or video stream"));
-    }
 
     let duration_us = options.duration_seconds.map(seconds_to_microseconds);
     let video_limit_pts = duration_us.map(|duration_us| {
@@ -337,6 +424,7 @@ pub(crate) fn play_opened_input<O: FrameOutput>(
     });
 
     let video_duration_us = video_stream.as_ref().and_then(stream_duration_us);
+    let audio_duration_us = audio_stream.as_ref().and_then(stream_duration_us);
     let video_end_pts = video_duration_us.map(|duration_us| {
         let duration_us = duration_us.saturating_sub(seek_us);
         timeline.video_pts
@@ -345,6 +433,13 @@ pub(crate) fn play_opened_input<O: FrameOutput>(
     let logo_fade_plan = options
         .logo_fade_plan
         .with_end_pts(video_limit_pts.or(video_end_pts));
+    let media_fade_plan = MediaFadePlan::for_trimmed_clip(
+        duration_us,
+        seek_us,
+        video_duration_us.or(audio_duration_us),
+        timeline,
+        cfg,
+    );
 
     let trim_start_us = (seek_us > 0).then_some(seek_us);
     let mut video = match video_stream {
@@ -360,7 +455,7 @@ pub(crate) fn play_opened_input<O: FrameOutput>(
         None => None,
     };
     let mut audio = match audio_stream {
-        Some(ref stream) => Some(AudioDecoder::new(stream, cfg, trim_start_us)?),
+        Some(ref stream) => Some(AudioDecoder::new(stream, cfg, label, trim_start_us)?),
         None => None,
     };
 
@@ -399,6 +494,7 @@ pub(crate) fn play_opened_input<O: FrameOutput>(
                         &mut decoded_video_frames,
                         video_limit_pts,
                         logo_fade_plan,
+                        media_fade_plan,
                         options.playback_control,
                     )?;
                 }
@@ -412,6 +508,7 @@ pub(crate) fn play_opened_input<O: FrameOutput>(
                     output,
                     &mut decoded_audio_samples,
                     audio_limit_pts,
+                    media_fade_plan,
                     options.playback_control,
                 )?;
             }
@@ -432,6 +529,7 @@ pub(crate) fn play_opened_input<O: FrameOutput>(
             &mut video_finished,
             video_limit_pts,
             logo_fade_plan,
+            media_fade_plan,
             options.playback_control,
         )?;
         if let Some(audio) = audio.as_mut() {
@@ -442,6 +540,7 @@ pub(crate) fn play_opened_input<O: FrameOutput>(
                 output,
                 &mut decoded_audio_samples,
                 audio_limit_pts,
+                media_fade_plan,
                 options.playback_control,
             )?;
             flush_audio_resampler(
@@ -450,6 +549,7 @@ pub(crate) fn play_opened_input<O: FrameOutput>(
                 output,
                 &mut decoded_audio_samples,
                 audio_limit_pts,
+                media_fade_plan,
             )?;
         }
 
@@ -505,6 +605,7 @@ fn finish_video<O: FrameOutput>(
     finished: &mut bool,
     limit_pts: Option<i64>,
     logo_fade_plan: LogoFadePlan,
+    media_fade_plan: MediaFadePlan,
     playback_control: &PlaybackControl,
 ) -> Result<()> {
     if *finished {
@@ -520,6 +621,7 @@ fn finish_video<O: FrameOutput>(
             decoded_frames,
             limit_pts,
             logo_fade_plan,
+            media_fade_plan,
             playback_control,
         )?;
     }
@@ -530,6 +632,7 @@ fn finish_video<O: FrameOutput>(
         decoded_frames,
         limit_pts,
         logo_fade_plan,
+        media_fade_plan,
         playback_control,
     )?;
     output.video_decoded()?;
@@ -537,6 +640,7 @@ fn finish_video<O: FrameOutput>(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn repeat_single_video_frame_to_limit<O: FrameOutput>(
     video: &mut Option<VideoDecoder>,
     timeline: &mut Timeline,
@@ -544,6 +648,7 @@ fn repeat_single_video_frame_to_limit<O: FrameOutput>(
     decoded_frames: &mut i64,
     limit_pts: Option<i64>,
     logo_fade_plan: LogoFadePlan,
+    media_fade_plan: MediaFadePlan,
     playback_control: &PlaybackControl,
 ) -> Result<()> {
     let Some(limit_pts) = limit_pts else {
@@ -568,6 +673,10 @@ fn repeat_single_video_frame_to_limit<O: FrameOutput>(
     while timeline.video_pts < limit_pts {
         check_playback_control(playback_control)?;
         let mut frame = frame.clone();
+        apply_video_fade(
+            &mut frame,
+            media_fade_plan.video_opacity_at(timeline.video_pts),
+        );
         apply_overlays(&mut frame, video, timeline, logo_fade_plan, output);
         frame.set_pts(Some(timeline.video_pts));
         output.encode_video(&frame)?;
@@ -588,7 +697,7 @@ fn single_frame_repeat_frames(decoded_frames: i64, video_pts: i64, limit_pts: i6
 }
 
 fn stream_duration_us(stream: &format::stream::Stream) -> Option<i64> {
-    if stream.duration() > 0 {
+    if stream.duration() > 0 && has_valid_time_base(stream.time_base()) {
         return Some(
             stream
                 .duration()
@@ -616,6 +725,7 @@ fn parse_duration_us(duration: &str) -> Option<i64> {
     (duration_us > 0.0).then_some(duration_us as i64)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn receive_video_frames<O: FrameOutput>(
     video: &mut VideoDecoder,
     timeline: &mut Timeline,
@@ -623,6 +733,7 @@ fn receive_video_frames<O: FrameOutput>(
     decoded_frames: &mut i64,
     limit_pts: Option<i64>,
     logo_fade_plan: LogoFadePlan,
+    media_fade_plan: MediaFadePlan,
     playback_control: &PlaybackControl,
 ) -> Result<()> {
     let mut raw = frame::Video::empty();
@@ -684,6 +795,10 @@ fn receive_video_frames<O: FrameOutput>(
             // positions) on top of each other for duplicated frames during
             // frame-rate up-conversion.
             let mut frame = pristine.clone();
+            apply_video_fade(
+                &mut frame,
+                media_fade_plan.video_opacity_at(timeline.video_pts),
+            );
             apply_overlays(&mut frame, video, timeline, logo_fade_plan, output);
             frame.set_pts(Some(timeline.video_pts));
             output.encode_video(&frame)?;
@@ -730,12 +845,54 @@ fn apply_overlays(
     timeline.text_pts += 1;
 }
 
+/// Fades the decoded video toward limited-range YUV black before overlays are
+/// blended, so logos and text remain fully visible during a clipped end.
+fn apply_video_fade(frame: &mut frame::Video, opacity: f32) {
+    if opacity >= 1.0 {
+        return;
+    }
+
+    for plane in 0..frame.planes() {
+        let target = if plane == 0 { 16.0 } else { 128.0 };
+        let width = if plane == 0 {
+            frame.width()
+        } else {
+            frame.width() / 2
+        } as usize;
+        let height = if plane == 0 {
+            frame.height()
+        } else {
+            frame.height() / 2
+        } as usize;
+        let stride = frame.stride(plane);
+        let data = frame.data_mut(plane);
+        for row in data.chunks_mut(stride).take(height) {
+            for sample in &mut row[..width] {
+                *sample = (*sample as f32 * opacity + target * (1.0 - opacity)).round() as u8;
+            }
+        }
+    }
+}
+
+fn apply_audio_fade(frame: &mut frame::Audio, start_pts: i64, fade: MediaFadePlan) {
+    if fade.audio_end_pts.is_none() {
+        return;
+    }
+
+    for plane in 0..frame.planes() {
+        for (sample_index, sample) in frame.plane_mut::<f32>(plane).iter_mut().enumerate() {
+            *sample *= fade.audio_gain_at(start_pts + sample_index as i64);
+        }
+    }
+}
+
 fn receive_audio_frames<O: FrameOutput>(
     audio: &mut AudioDecoder,
     timeline: &mut Timeline,
     output: &mut O,
     decoded_samples: &mut i64,
     limit_pts: Option<i64>,
+    media_fade_plan: MediaFadePlan,
     playback_control: &PlaybackControl,
 ) -> Result<()> {
     let mut raw = frame::Audio::empty();
@@ -763,6 +920,7 @@ fn receive_audio_frames<O: FrameOutput>(
             resample_audio_frame(&mut audio.resampler, &raw)
         })?;
         let samples = converted.samples() as i64;
+        apply_audio_fade(&mut converted, timeline.audio_pts, media_fade_plan);
         converted.set_pts(Some(timeline.audio_pts));
         output.encode_audio(&converted)?;
         timeline.audio_pts += samples;
@@ -805,6 +963,7 @@ fn flush_audio_resampler<O: FrameOutput>(
     output: &mut O,
     decoded_samples: &mut i64,
     limit_pts: Option<i64>,
+    media_fade_plan: MediaFadePlan,
 ) -> Result<()> {
     loop {
         if limit_pts.is_some_and(|limit| timeline.audio_pts >= limit) {
@@ -824,6 +983,7 @@ fn flush_audio_resampler<O: FrameOutput>(
             return Ok(());
         }
 
+        apply_audio_fade(&mut converted, timeline.audio_pts, media_fade_plan);
         converted.set_pts(Some(timeline.audio_pts));
         output.encode_audio(&converted)?;
         timeline.audio_pts += samples;
@@ -848,6 +1008,30 @@ fn is_before_trim_start(
     };
 
     timestamp.rescale(time_base, Rational(1, 1_000_000)) < trim_start_us
+}
+
+fn has_valid_time_base(time_base: Rational) -> bool {
+    time_base.numerator() > 0 && time_base.denominator() > 0
+}
+
+fn has_valid_frame_rate(frame_rate: Rational) -> bool {
+    frame_rate.numerator() > 0 && frame_rate.denominator() > 0
+}
+
+fn fallback_video_time_base(
+    average_frame_rate: Rational,
+    frame_rate: Rational,
+    output_fps: u32,
+) -> Result<Rational> {
+    let frame_rate = [average_frame_rate, frame_rate]
+        .into_iter()
+        .find(|frame_rate| has_valid_frame_rate(*frame_rate))
+        .unwrap_or(Rational(
+            i32::try_from(output_fps).context("output frame rate exceeds FFmpeg limits")?,
+            1,
+        ));
+
+    Ok(Rational(frame_rate.denominator(), frame_rate.numerator()))
 }
 
 struct VideoDecoder {
@@ -887,6 +1071,18 @@ impl VideoDecoder {
             codec::threading::Type::Frame,
         ));
         let decoder = ctx.decoder().video()?;
+        let stream_time_base = stream.time_base();
+        let timestamps_reliable = has_valid_time_base(stream_time_base);
+        let input_time_base = if timestamps_reliable {
+            stream_time_base
+        } else {
+            let fallback =
+                fallback_video_time_base(stream.avg_frame_rate(), stream.rate(), cfg.fps)?;
+            warn!(
+                "{label}: video stream has invalid time base {stream_time_base}; using {fallback} derived from frame rate"
+            );
+            fallback
+        };
         let scale = VideoScale::new(decoder.width(), decoder.height(), cfg);
         let scaler = scaling::Context::get(
             decoder.format(),
@@ -945,9 +1141,13 @@ impl VideoDecoder {
             runtime_text_revision: runtime_text_snapshot.revision,
             runtime_text,
             label: label.to_string(),
-            frame_rate_converter: FrameRateConverter::new(stream.time_base(), cfg.fps),
+            frame_rate_converter: FrameRateConverter::new(
+                input_time_base,
+                cfg.fps,
+                timestamps_reliable,
+            ),
             output_fps: cfg.fps,
-            trim_start_us,
+            trim_start_us: timestamps_reliable.then_some(trim_start_us).flatten(),
             last_output_frame: None,
             last_composited_frame: None,
         })
@@ -1038,21 +1238,32 @@ fn fit_dimensions(
 struct FrameRateConverter {
     input_time_base: Rational,
     output_time_base: Rational,
+    timestamps_reliable: bool,
     first_timestamp: Option<i64>,
     next_output_frame: i64,
+    next_synthetic_timestamp: i64,
 }
 
 impl FrameRateConverter {
-    fn new(input_time_base: Rational, output_fps: u32) -> Self {
+    fn new(input_time_base: Rational, output_fps: u32, timestamps_reliable: bool) -> Self {
         Self {
             input_time_base,
             output_time_base: Rational(1, output_fps as i32),
+            timestamps_reliable,
             first_timestamp: None,
             next_output_frame: 0,
+            next_synthetic_timestamp: 0,
         }
     }
 
     fn output_frames(&mut self, timestamp: Option<i64>) -> i64 {
+        let timestamp = if self.timestamps_reliable {
+            timestamp
+        } else {
+            let timestamp = self.next_synthetic_timestamp;
+            self.next_synthetic_timestamp += 1;
+            Some(timestamp)
+        };
         let Some(timestamp) = timestamp else {
             self.next_output_frame += 1;
             return 1;
@@ -1081,10 +1292,30 @@ impl AudioDecoder {
     fn new(
         stream: &format::stream::Stream,
         cfg: &OutputConfig,
+        label: &str,
         trim_start_us: Option<i64>,
     ) -> Result<Self> {
         let ctx = codec::context::Context::from_parameters(stream.parameters())?;
-        let decoder = ctx.decoder().audio()?;
+        let mut decoder = ctx.decoder().audio()?;
+        let stream_time_base = stream.time_base();
+        let timestamps_reliable = has_valid_time_base(stream_time_base);
+        let input_time_base = if timestamps_reliable {
+            stream_time_base
+        } else {
+            let sample_rate =
+                i32::try_from(decoder.rate()).context("audio sample rate exceeds FFmpeg limits")?;
+            if sample_rate <= 0 {
+                return Err(anyhow!(
+                    "{label}: audio stream has an invalid time base and no sample rate"
+                ));
+            }
+            let fallback = Rational(1, sample_rate);
+            warn!(
+                "{label}: audio stream has invalid time base {stream_time_base}; using {fallback} derived from sample rate"
+            );
+            fallback
+        };
+        decoder.set_packet_time_base(input_time_base);
         let channel_layout = audio_channel_layout(&decoder);
         let resampler = resampling::Context::get(
             decoder.format(),
@@ -1098,8 +1329,8 @@ impl AudioDecoder {
             decoder,
             resampler,
             input_channel_layout: channel_layout,
-            input_time_base: stream.time_base(),
-            trim_start_us,
+            input_time_base,
+            trim_start_us: timestamps_reliable.then_some(trim_start_us).flatten(),
         })
     }
 }
@@ -1492,14 +1723,18 @@ fn write_silence<O: FrameOutput>(
 #[cfg(test)]
 mod tests {
     use anyhow::Result;
-    use ffmpeg_next::frame;
+    use ffmpeg_next::{codec, frame, media};
 
     use super::{
-        FrameRateConverter, LogoFade, PlaybackControl, Rational, Timeline, fit_dimensions,
+        AudioDecoder, FrameRateConverter, LogoFade, MediaFadePlan, PlaybackControl, Rational,
+        Timeline, apply_audio_fade, fallback_video_time_base, fit_dimensions, has_valid_time_base,
         padding_to_sync, parse_duration_us, play_clip, resample_audio_frame,
         should_play_loop_iteration, single_frame_repeat_frames, synchronize_after_skip,
     };
-    use crate::{output::FrameOutput, utils::config::OutputConfig};
+    use crate::{
+        output::FrameOutput,
+        utils::{config::OutputConfig, helper::open_media_input},
+    };
 
     #[derive(Default)]
     struct RecordingOutput {
@@ -1695,6 +1930,115 @@ mod tests {
     }
 
     #[test]
+    fn audio_decoder_uses_stream_time_base_for_aac_padding() {
+        let input = open_media_input(&media_mix_asset("av_sync.mp4")).unwrap();
+        let stream = input.streams().best(media::Type::Audio).unwrap();
+        let stream_time_base = stream.time_base();
+
+        assert_eq!(stream.parameters().id(), codec::Id::AAC);
+
+        // This reproduces the old decoder setup. FFmpeg cannot adjust AAC
+        // priming or end-padding timestamps when this remains unset.
+        let context = codec::context::Context::from_parameters(stream.parameters()).unwrap();
+        let unconfigured_decoder = context.decoder().audio().unwrap();
+        assert_ne!(unconfigured_decoder.packet_time_base(), stream_time_base);
+
+        let cfg = OutputConfig::new(320, 240, 25, 48_000);
+        let decoder = AudioDecoder::new(&stream, &cfg, "AAC test input", None).unwrap();
+        assert_eq!(decoder.decoder.packet_time_base(), stream_time_base);
+    }
+
+    #[test]
+    fn detects_invalid_time_bases() {
+        assert!(!has_valid_time_base(Rational(0, 0)));
+        assert!(!has_valid_time_base(Rational(0, 1)));
+        assert!(!has_valid_time_base(Rational(1, 0)));
+        assert!(has_valid_time_base(Rational(1, 90_000)));
+    }
+
+    #[test]
+    fn derives_video_time_base_from_source_frame_rate() {
+        assert_eq!(
+            fallback_video_time_base(Rational(30_000, 1_001), Rational(0, 0), 25).unwrap(),
+            Rational(1_001, 30_000)
+        );
+        assert_eq!(
+            fallback_video_time_base(Rational(0, 0), Rational(24, 1), 25).unwrap(),
+            Rational(1, 24)
+        );
+        assert_eq!(
+            fallback_video_time_base(Rational(0, 0), Rational(0, 0), 25).unwrap(),
+            Rational(1, 25)
+        );
+    }
+
+    #[test]
+    fn invalid_video_time_base_uses_synthetic_frame_timestamps() {
+        let mut converter = FrameRateConverter::new(Rational(1, 30), 25, false);
+        let output_frames: i64 = (0..30).map(|_| converter.output_frames(None)).sum();
+
+        assert_eq!(output_frames, 25);
+    }
+
+    #[test]
+    fn media_fade_only_applies_when_scheduled_out_differs_from_source_duration() {
+        let cfg = OutputConfig::new(320, 240, 25, 1_000);
+        let timeline = Timeline::new();
+
+        let full_clip =
+            MediaFadePlan::for_trimmed_clip(Some(10_000_000), 0, Some(10_000_000), &timeline, &cfg);
+        assert_eq!(full_clip.video_opacity_at(9 * 25), 1.0);
+
+        let trimmed_clip =
+            MediaFadePlan::for_trimmed_clip(Some(8_000_000), 0, Some(10_000_000), &timeline, &cfg);
+        assert_eq!(trimmed_clip.video_opacity_at(7 * 25), 1.0);
+        assert!(trimmed_clip.video_opacity_at(7 * 25 + 13) < 0.5);
+        assert_eq!(trimmed_clip.video_opacity_at(8 * 25), 0.0);
+    }
+
+    #[test]
+    fn media_fade_respects_seek_when_comparing_out_to_source_duration() {
+        let cfg = OutputConfig::new(320, 240, 25, 1_000);
+        let timeline = Timeline::new();
+        let fade = MediaFadePlan::for_trimmed_clip(
+            Some(8_000_000),
+            2_000_000,
+            Some(10_000_000),
+            &timeline,
+            &cfg,
+        );
+
+        assert_eq!(fade.video_opacity_at(7 * 25), 1.0);
+    }
+
+    #[test]
+    fn media_fade_attenuates_audio_samples_at_clip_end() {
+        use ffmpeg_next::{
+            format::sample::{Sample, Type},
+            util::channel_layout::ChannelLayout,
+        };
+
+        let cfg = OutputConfig::new(320, 240, 25, 1_000);
+        let fade = MediaFadePlan::for_trimmed_clip(
+            Some(2_000_000),
+            0,
+            Some(3_000_000),
+            &Timeline::new(),
+            &cfg,
+        );
+        let mut audio = frame::Audio::new(Sample::F32(Type::Planar), 4, ChannelLayout::STEREO);
+        for plane in 0..audio.planes() {
+            audio.plane_mut::<f32>(plane).fill(1.0);
+        }
+
+        apply_audio_fade(&mut audio, 1_998, fade);
+
+        assert!(audio.plane::<f32>(0)[0] > 0.0);
+        assert_eq!(audio.plane::<f32>(0)[2], 0.0);
+        assert_eq!(audio.plane::<f32>(1)[3], 0.0);
+    }
+
+    #[test]
     fn finishes_video_only_after_padding_short_audio() {
         let cfg = OutputConfig::new(320, 240, 25, 48_000);
         let mut timeline = Timeline::new();
@@ -1790,7 +2134,7 @@ mod tests {
 
     #[test]
     fn converts_24_fps_to_25_fps() {
-        let mut converter = FrameRateConverter::new(Rational(1, 24), 25);
+        let mut converter = FrameRateConverter::new(Rational(1, 24), 25, true);
         let output_frames = (0..240)
             .map(|timestamp| converter.output_frames(Some(timestamp)))
             .sum::<i64>();
@@ -1800,7 +2144,7 @@ mod tests {
 
     #[test]
     fn converts_30_fps_to_25_fps() {
-        let mut converter = FrameRateConverter::new(Rational(1, 30), 25);
+        let mut converter = FrameRateConverter::new(Rational(1, 30), 25, true);
         let output_counts = (0..300)
             .map(|timestamp| converter.output_frames(Some(timestamp)))
             .collect::<Vec<_>>();

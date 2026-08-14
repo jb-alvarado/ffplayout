@@ -19,6 +19,7 @@ pub mod errors;
 pub mod generator;
 pub mod logging;
 pub mod mail;
+pub mod paths;
 pub mod playlist;
 pub mod system;
 pub mod task_runner;

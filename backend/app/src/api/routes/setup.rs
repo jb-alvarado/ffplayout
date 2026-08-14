@@ -1,4 +1,4 @@
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use argon2::{
     Argon2, PasswordHasher,
@@ -12,7 +12,7 @@ use tokio::task;
 use crate::{
     api::state::AppState,
     db::{handles, models::GlobalSettings},
-    utils::{channels::initialize_channels, errors::ServiceError},
+    utils::{channels::initialize_channels, errors::ServiceError, paths::validate_directory_path},
 };
 
 #[derive(Debug, Serialize)]
@@ -62,17 +62,6 @@ pub struct SetupRequest {
     two_factor: bool,
 }
 
-const PROTECTED_SYSTEM_PATHS: &[&str] = &[
-    "/bin", "/boot", "/dev", "/etc", "/lib", "/lib64", "/proc", "/root", "/run", "/sbin", "/sys",
-    "/tmp", "/usr", "/var",
-];
-const APPLICATION_SYSTEM_PATHS: &[&str] = &[
-    "/usr/share/ffplayout",
-    "/var/lib/ffplayout",
-    "/var/log/ffplayout",
-    "/var/www",
-];
-
 fn validate_setup_paths(settings: &SetupSettings) -> Result<(), ServiceError> {
     [
         ("Logging", settings.logs.as_str()),
@@ -81,39 +70,9 @@ fn validate_setup_paths(settings: &SetupSettings) -> Result<(), ServiceError> {
         ("Storage", settings.storage.as_str()),
     ]
     .into_iter()
-    .try_for_each(|(name, path)| validate_setup_path(name, path))
-}
-
-fn validate_setup_path(name: &str, value: &str) -> Result<(), ServiceError> {
-    let path = Path::new(value.trim());
-    if value.trim().is_empty() || !path.is_absolute() || path.parent().is_none() {
-        return Err(ServiceError::BadRequest(format!(
-            "{name} path must be an absolute directory"
-        )));
-    }
-
-    if path
-        .components()
-        .any(|component| matches!(component, Component::CurDir | Component::ParentDir))
-    {
-        return Err(ServiceError::BadRequest(format!(
-            "{name} path must not contain relative components"
-        )));
-    }
-
-    let is_application_path = APPLICATION_SYSTEM_PATHS
-        .iter()
-        .any(|allowed| path.starts_with(allowed));
-    let is_protected_system_path = PROTECTED_SYSTEM_PATHS
-        .iter()
-        .any(|protected| path.starts_with(protected));
-    if is_protected_system_path && !is_application_path {
-        return Err(ServiceError::BadRequest(format!(
-            "{name} path must not point to a system directory"
-        )));
-    }
-
-    Ok(())
+    .try_for_each(|(name, path)| {
+        validate_directory_path(name, path).map_err(ServiceError::BadRequest)
+    })
 }
 
 pub async fn get_setup_status(

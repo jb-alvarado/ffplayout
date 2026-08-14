@@ -7,7 +7,7 @@ use std::{
 
 use ff_engine::{
     AsyncPlayout, AudioLevelCallback, ClipResult, HlsHealth, LogLevel, LogoConfig, LogoFade,
-    OutputConfig, TextOverlayState,
+    OutputConfig, RecordingConfig, RecordingEncodeConfig, TextOverlayState,
 };
 use log::*;
 use tokio::time::sleep;
@@ -21,7 +21,7 @@ use crate::{
         utils::{Media, get_delta, sec_to_time},
     },
     utils::{
-        config::{OutputMode, PlayoutConfig},
+        config::{OutputMode, PlayoutConfig, RecordingSource},
         control::{PlayerCtl, control_state},
         errors::ServiceError,
         text::text_config,
@@ -63,7 +63,7 @@ pub async fn player(manager: ChannelManager) -> Result<(), ServiceError> {
         );
         #[cfg(not(feature = "desktop-cpu"))]
         info!(channel = config.general.channel_id;
-            "Desktop output uses backend/engine winit/pixels renderer"
+            "Desktop output uses backend/engine winit/wgpu renderer"
         );
     }
 
@@ -442,6 +442,8 @@ fn engine_output_config(
         .parse::<LogLevel>()
         .map_err(ServiceError::Conflict)?;
 
+    let recording = recording_config(config)?;
+
     Ok(OutputConfig::new(width, height, fps, 48_000)
         .with_audio_effects(audio_effects)
         .with_live_loudness_control(live_loudness)
@@ -466,7 +468,101 @@ fn engine_output_config(
             config.output.video_options.clone(),
             config.output.audio_codec.clone(),
             u64::from(config.output.audio_bitrate) * 1_000,
-        ))
+        )
+        .with_recording(recording))
+}
+
+fn recording_config(config: &PlayoutConfig) -> Result<Option<RecordingConfig>, ServiceError> {
+    let recording = &config.recording;
+    if !recording.enable {
+        return Ok(None);
+    }
+
+    match recording.source {
+        RecordingSource::Stream => {
+            if config.output.mode != OutputMode::Stream {
+                return disable_incompatible_recording(
+                    config,
+                    "source \"stream\" requires stream output",
+                );
+            }
+            if recording.source_output_id != Some(config.output.id) {
+                return disable_incompatible_recording(
+                    config,
+                    "the configured stream source is not the active output",
+                );
+            }
+            Ok(Some(
+                RecordingConfig::new(recording.path.clone(), recording.segment_duration)
+                    .with_channel_id(Some(config.general.channel_id))
+                    .with_retention_days(recording.retention_days)
+                    .with_minimum_free_space_gb(recording.minimum_free_space_gb),
+            ))
+        }
+        RecordingSource::HlsVariant => {
+            if config.output.mode != OutputMode::HLS {
+                return disable_incompatible_recording(
+                    config,
+                    "source \"hls_variant\" requires HLS output",
+                );
+            }
+            if recording.source_output_id != Some(config.output.id) {
+                return disable_incompatible_recording(
+                    config,
+                    "the configured HLS source is not the active output",
+                );
+            }
+            let stream_index = config
+                .output
+                .hls_streams()
+                .map_err(ServiceError::Conflict)?
+                .iter()
+                .position(|variant| variant.name == recording.variant)
+                .ok_or_else(|| {
+                    ServiceError::Conflict("recording HLS variant is unavailable".to_string())
+                })?;
+            Ok(Some(
+                RecordingConfig::new(recording.path.clone(), recording.segment_duration)
+                    .with_channel_id(Some(config.general.channel_id))
+                    .with_video_stream_index(stream_index)
+                    .with_retention_days(recording.retention_days)
+                    .with_minimum_free_space_gb(recording.minimum_free_space_gb),
+            ))
+        }
+        RecordingSource::Encode => Ok(Some(
+            RecordingConfig::new(recording.path.clone(), recording.segment_duration)
+                .with_channel_id(Some(config.general.channel_id))
+                .with_retention_days(recording.retention_days)
+                .with_minimum_free_space_gb(recording.minimum_free_space_gb)
+                .with_encode(RecordingEncodeConfig {
+                    width: if recording.width == 0 {
+                        config.output.width
+                    } else {
+                        recording.width
+                    },
+                    height: if recording.height == 0 {
+                        config.output.height
+                    } else {
+                        recording.height
+                    },
+                    video_codec: recording.video_codec.clone(),
+                    video_options: recording.video_options.clone(),
+                    audio_codec: recording.audio_codec.clone(),
+                    audio_bitrate: u64::from(recording.audio_bitrate) * 1_000,
+                }),
+        )),
+    }
+}
+
+fn disable_incompatible_recording(
+    config: &PlayoutConfig,
+    reason: &str,
+) -> Result<Option<RecordingConfig>, ServiceError> {
+    warn!(channel = config.general.channel_id;
+        "Recording disabled for this run: {reason}; active output is {}",
+        config.output.mode
+    );
+    Ok(None)
 }
 
 fn desktop_control_callback(manager: ChannelManager) -> ff_engine::DesktopControlCallback {
@@ -586,9 +682,28 @@ fn request_shutdown(shutdown: &CancellationToken) {
 
 #[cfg(test)]
 mod tests {
-    use super::{hls_rate_correction, playout_duration, request_shutdown};
+    use super::{hls_rate_correction, playout_duration, recording_config, request_shutdown};
     use crate::player::utils::Media;
+    use crate::utils::config::{OutputMode, PlayoutConfig, RecordingSource};
     use tokio_util::sync::CancellationToken;
+
+    fn recording_test_config(mode: OutputMode, source: RecordingSource) -> PlayoutConfig {
+        let mut config = PlayoutConfig::default();
+        config.general.channel_id = 1;
+        config.output.id = 3;
+        config.output.mode = mode;
+        config.output.width = 1280;
+        config.output.height = 720;
+        config.recording.enable = true;
+        config.recording.source = source;
+        config.recording.source_output_id = Some(3);
+        config.recording.path = "/tmp/recordings".to_string();
+        config.recording.segment_duration = 300;
+        config.recording.video_codec = "libx264".to_string();
+        config.recording.audio_codec = "aac".to_string();
+        config.recording.audio_bitrate = 128;
+        config
+    }
 
     #[test]
     fn full_placeholder_keeps_explicit_duration() {
@@ -659,5 +774,35 @@ mod tests {
         request_shutdown(&shutdown);
 
         assert!(shutdown.is_cancelled());
+    }
+
+    #[test]
+    fn desktop_override_disables_stream_copy_recording() {
+        let config = recording_test_config(OutputMode::Desktop, RecordingSource::Stream);
+
+        assert!(recording_config(&config).unwrap().is_none());
+    }
+
+    #[test]
+    fn desktop_override_disables_hls_variant_recording() {
+        let config = recording_test_config(OutputMode::Desktop, RecordingSource::HlsVariant);
+
+        assert!(recording_config(&config).unwrap().is_none());
+    }
+
+    #[test]
+    fn desktop_override_keeps_dedicated_recording_encode() {
+        let config = recording_test_config(OutputMode::Desktop, RecordingSource::Encode);
+
+        let recording = recording_config(&config).unwrap().unwrap();
+        assert!(recording.encode.is_some());
+    }
+
+    #[test]
+    fn inactive_copy_source_disables_recording() {
+        let mut config = recording_test_config(OutputMode::Stream, RecordingSource::Stream);
+        config.recording.source_output_id = Some(2);
+
+        assert!(recording_config(&config).unwrap().is_none());
     }
 }

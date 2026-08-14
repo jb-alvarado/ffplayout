@@ -4,6 +4,7 @@ pub mod global;
 pub mod init;
 pub mod output;
 pub mod preset;
+pub mod recording;
 pub mod refresh_token;
 pub mod user;
 
@@ -13,5 +14,6 @@ pub use global::*;
 pub use init::*;
 pub use output::*;
 pub use preset::*;
+pub use recording::*;
 pub use refresh_token::*;
 pub use user::*;

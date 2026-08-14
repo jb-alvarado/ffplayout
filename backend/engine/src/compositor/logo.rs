@@ -9,6 +9,7 @@ use crate::{
     },
 };
 
+#[derive(Clone)]
 pub struct LogoOverlay {
     pub frame: frame::Video, // YUVA420P
     chroma_alpha: Vec<u8>,

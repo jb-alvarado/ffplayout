@@ -83,6 +83,12 @@ const router = createRouter({
                     meta: { showHeader: true, roles: ['global_admin', 'channel_admin'] },
                 },
                 {
+                    path: 'recording',
+                    name: 'configure-recording',
+                    component: () => import('@/components/config/ConfigRecording.vue'),
+                    meta: { showHeader: true, roles: ['global_admin', 'channel_admin'] },
+                },
+                {
                     path: 'user',
                     name: 'configure-user',
                     component: () => import('@/components/config/ConfigUser.vue'),

@@ -82,6 +82,7 @@ declare global {
         srt: OutputCodecOptions
         udp: OutputCodecOptions
         custom: OutputCodecOptions
+        recording: OutputCodecOptions
     }
 
     interface TextPreset {
