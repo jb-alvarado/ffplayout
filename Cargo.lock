@@ -1532,6 +1532,7 @@ version = "2.1.0-beta.1"
 dependencies = [
  "anyhow",
  "bytemuck",
+ "chrono",
  "clap",
  "cosmic-text",
  "cpal",

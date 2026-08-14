@@ -25,6 +25,10 @@ ffmpeg-device = ["ffmpeg-next/device"]
 [dependencies]
 anyhow = "1"
 bytemuck = { version = "1", optional = true }
+chrono = { version = "0.4", default-features = false, features = [
+    "clock",
+    "std",
+] }
 cpal = { version = "0.18", optional = true }
 cosmic-text = "0.19"
 ebur128-stream = "=0.2.0"
