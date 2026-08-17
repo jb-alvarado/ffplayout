@@ -178,7 +178,7 @@ declare global {
         duration: number
         in: number
         out: number
-        category?: string
+        ad?: boolean
         overtime?: boolean
     }
 
@@ -224,6 +224,7 @@ declare global {
 
     interface BodyObject {
         paths?: string[]
+        shuffle?: boolean
         template?: Template
     }
 

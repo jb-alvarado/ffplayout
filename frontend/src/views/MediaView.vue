@@ -44,6 +44,7 @@ const recursive = ref(false)
 const renameOldName = ref('')
 const renameOldPath = ref('')
 const renameNewName = ref('')
+const renameIsFolder = ref(false)
 const previewName = ref('')
 const previewUrl = ref('')
 const previewOpt = ref()
@@ -234,12 +235,14 @@ async function deleteFileOrFolder(del: boolean) {
     deleteName.value = ''
 }
 
-function setRenameValues(path: string) {
+function setRenameValues(path: string, isFolder: boolean) {
     const filepath = dir_file(path)
 
     renameOldName.value = filepath.file
     renameOldPath.value = filepath.dir
     renameNewName.value = filepath.file
+    renameIsFolder.value = isFolder
+    showRenameModal.value = true
 }
 
 async function renameFile(ren: boolean) {
@@ -268,6 +271,7 @@ async function renameFile(ren: boolean) {
     renameOldName.value = ''
     renameOldPath.value = ''
     renameNewName.value = ''
+    renameIsFolder.value = false
 }
 
 function closePlayer() {
@@ -410,7 +414,7 @@ async function uploadFiles(upl: boolean) {
                                         <tr
                                             v-for="folder in mediaStore.folderTree.parent_folders"
                                             :key="folder.uid"
-                                            class="grid grid-cols-[auto_30px] border-b border-base-content/20"
+                                            class="grid grid-cols-[auto] border-b border-base-content/20"
                                             :class="
                                                 filename(mediaStore.folderTree.source) === folder.name &&
                                                 'bg-secondary! text-black'
@@ -431,20 +435,6 @@ async function uploadFiles(upl: boolean) {
                                                     <i class="bi-folder-fill" />
                                                     {{ folder.name }}
                                                 </a>
-                                            </td>
-
-                                            <td class="px-2 py-1.5 text-center">
-                                                <button
-                                                    class="opacity-30 hover:opacity-100 cursor-pointer"
-                                                    @click="
-                                                        ;(showDeleteModal = true),
-                                                            (deleteName = `/${parent(mediaStore.folderTree.source)}/${
-                                                                folder.name
-                                                            }`.replace(/\/[/]+/g, '/'))
-                                                    "
-                                                >
-                                                    <i class="bi-x-circle-fill" />
-                                                </button>
                                             </td>
                                         </tr>
                                     </template>
@@ -470,7 +460,7 @@ async function uploadFiles(upl: boolean) {
                                     <tr
                                         v-for="folder in mediaStore.folderTree.folders"
                                         :key="folder.uid"
-                                        class="grid grid-cols-[auto_40px] border-b border-base-content/20"
+                                        class="grid grid-cols-[auto_64px] border-b border-base-content/20"
                                         @drop="handleDrop($event, folder, false)"
                                         @dragover="handleDragOver"
                                         @dragleave="handleDragLeave"
@@ -488,7 +478,21 @@ async function uploadFiles(upl: boolean) {
                                                 {{ folder.name }}
                                             </a>
                                         </td>
-                                        <td class="ps-2 pe-3.5 py-1.5 text-right">
+                                        <td class="ps-2 pe-3.5 py-1.5 flex justify-end gap-2">
+                                            <button
+                                                class="opacity-30 hover:opacity-100 cursor-pointer"
+                                                @click="
+                                                    setRenameValues(
+                                                        `/${mediaStore.folderTree.source}/${folder.name}`.replace(
+                                                            /\/[/]+/g,
+                                                            '/'
+                                                        ),
+                                                        true
+                                                    )
+                                                "
+                                            >
+                                                <i class="bi-pencil-square" />
+                                            </button>
                                             <button
                                                 class="opacity-30 hover:opacity-100 cursor-pointer"
                                                 @click="
@@ -539,13 +543,13 @@ async function uploadFiles(upl: boolean) {
                                             <button
                                                 class="w-7 cursor-pointer"
                                                 @click="
-                                                    ;(showRenameModal = true),
-                                                        setRenameValues(
-                                                            `/${mediaStore.folderTree.source}/${element.name}`.replace(
-                                                                /\/[/]+/g,
-                                                                '/'
-                                                            )
-                                                        )
+                                                    setRenameValues(
+                                                        `/${mediaStore.folderTree.source}/${element.name}`.replace(
+                                                            /\/[/]+/g,
+                                                            '/'
+                                                        ),
+                                                        false
+                                                    )
                                                 "
                                             >
                                                 <i class="bi-pencil-square" />
@@ -633,7 +637,9 @@ async function uploadFiles(upl: boolean) {
 
         <GenericModal :show="showRenameModal" :title="t('media.rename')" :modal-action="renameFile">
             <fieldset class="fieldset">
-                <legend class="fieldset-legend">{{ t('media.newFile') }}</legend>
+                <legend class="fieldset-legend">
+                    {{ renameIsFolder ? t('media.foldername') : t('media.newFile') }}
+                </legend>
                 <input v-model="renameNewName" type="text" class="input input-sm w-full" />
             </fieldset>
         </GenericModal>

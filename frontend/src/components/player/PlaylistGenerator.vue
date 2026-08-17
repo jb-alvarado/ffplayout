@@ -40,6 +40,7 @@ defineProps({
 const advancedGenerator = ref(false)
 const selectedFolders = ref([] as string[])
 const generateFromAll = ref(false)
+const simpleShuffle = ref(false)
 const template = ref({
     sources: [
         {
@@ -122,10 +123,10 @@ function addTemplate() {
 
 async function generatePlaylist() {
     playlistStore.isLoading = true
-    let body = null as BodyObject | null
+    const body = {} as BodyObject
 
     if (selectedFolders.value.length > 0 && !generateFromAll.value) {
-        body = { paths: selectedFolders.value }
+        body.paths = selectedFolders.value
     }
 
     if (advancedGenerator.value) {
@@ -134,11 +135,9 @@ async function generatePlaylist() {
                 .map((p) => (typeof p === 'string' ? p : p?.path))
                 .filter((p) => typeof p === 'string')
         })
-        if (body) {
-            body.template = template.value
-        } else {
-            body = { template: template.value }
-        }
+        body.template = template.value
+    } else {
+        body.shuffle = simpleShuffle.value
     }
 
     await authFetch<any>(`/api/playlist/${configStore.channels[configStore.i]?.id}/generate/${playlistStore.listDate}`, {
@@ -157,6 +156,7 @@ async function generatePlaylist() {
     // reset selections
     resetCheckboxes()
     resetTemplate()
+    simpleShuffle.value = false
 
     playlistStore.scrollToItem = true
     playlistStore.isLoading = false
@@ -338,7 +338,7 @@ async function generatePlaylist() {
                                         class="flex flex-col gap-1 justify-center items-center border border-base-content/30 rounded-sm mt-1 p-1"
                                     >
                                         <div
-                                            class="flex flex-wrap xs:grid xs:grid-cols-[58px_64px_67px_64px_67px] xs:join"
+                                            class="w-full flex flex-wrap xs:grid xs:grid-cols-[58px_64px_67px_64px_minmax(90px,1fr)] xs:join"
                                         >
                                             <div
                                                 class="input input-sm join-item px-1 text-center bg-base-200 leading-7"
@@ -360,13 +360,16 @@ async function generatePlaylist() {
                                                 type="text"
                                                 class="input input-sm join-item px-1 text-center"
                                             />
-                                            <button
-                                                class="btn btn-sm join-item"
-                                                :class="item.shuffle ? 'bg-base-100' : 'bg-base-300'"
-                                                @click="item.shuffle = !item.shuffle"
+                                            <label
+                                                class="h-8 join-item px-2 flex items-center justify-start gap-2 bg-base-200 border border-base-content/20 cursor-pointer"
                                             >
-                                                {{ item.shuffle ? t('player.shuffle') : t('player.sorted') }}
-                                            </button>
+                                                <input
+                                                    v-model="item.shuffle"
+                                                    type="checkbox"
+                                                    class="checkbox checkbox-xs rounded"
+                                                />
+                                                <span>{{ t('player.shuffle') }}</span>
+                                            </label>
                                         </div>
 
                                         <VirtualList
@@ -408,8 +411,8 @@ async function generatePlaylist() {
             </div>
 
             <div class="flex h-14 pt-6 justify-end items-center">
-                <div v-if="!advancedGenerator" class="form-control">
-                    <label class="label cursor-pointer w-12">
+                <div v-if="!advancedGenerator" class="flex gap-4">
+                    <label class="label cursor-pointer gap-2">
                         <span class="label-text">{{ t('player.all') }}</span>
                         <input
                             v-model="generateFromAll"
@@ -418,12 +421,16 @@ async function generatePlaylist() {
                             @change="resetCheckboxes()"
                         />
                     </label>
+                    <label class="label cursor-pointer gap-2">
+                        <span class="label-text">{{ t('player.shuffle') }}</span>
+                        <input v-model="simpleShuffle" type="checkbox" class="checkbox checkbox-xs rounded" />
+                    </label>
                 </div>
                 <div class="join ms-2">
                     <button
                         type="button"
                         class="btn btn-sm btn-primary join-item"
-                        @click="(resetCheckboxes(), resetTemplate(), close())"
+                        @click="(resetCheckboxes(), resetTemplate(), (simpleShuffle = false), close())"
                     >
                         {{ t('cancel') }}
                     </button>

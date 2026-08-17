@@ -101,14 +101,6 @@ async function getPlaylist() {
     }
 }
 
-function setCategory(event: any, item: PlaylistItem) {
-    if (event.target.checked) {
-        item.category = 'advertisement'
-    } else {
-        item.category = ''
-    }
-}
-
 function addBG(item: any) {
     if (item.event?.target) {
         item.event?.target.classList.add('!bg-fuchsia-900/30')
@@ -139,6 +131,7 @@ function dropItem(event: any) {
             in: 0,
             out: media.duration || 10,
             duration: media.duration || 10,
+            ad: false,
         }
 
         playlistStore.playlist[nIndex] = mediaObject
@@ -290,7 +283,7 @@ function deletePlaylistItem(index: number) {
                             'bg-lime-500/30!':
                                 playlistStore.playoutIsRunning && listDate === todayDate && index === currentIndex,
                             'bg-amber-600/40!': record.overtime,
-                            'text-base-content/60': record.category === 'advertisement',
+                            'text-base-content/60': record.ad,
                         }"
                     >
                         <div v-if="!configStore.playout.playlist.infinit" class="px-3 text-left">
@@ -313,10 +306,9 @@ function deletePlaylistItem(index: number) {
                         </div>
                         <div class="text-center hidden 2md:block leading-3">
                             <input
+                                v-model="record.ad"
                                 class="checkbox checkbox-xs rounded"
                                 type="checkbox"
-                                :checked="record.category && record.category === 'advertisement' ? true : false"
-                                @change="setCategory($event, record)"
                             />
                         </div>
                         <div class="text-center hover:text-base-content/70">

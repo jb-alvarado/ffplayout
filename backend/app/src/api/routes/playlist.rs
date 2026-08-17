@@ -94,7 +94,7 @@ pub async fn save_playlist(
 /// ```BASH
 /// curl -X POST http://127.0.0.1:8787/api/playlist/1/generate/2022-06-20
 /// -H 'Content-Type: application/json' -H 'Authorization: Bearer <TOKEN>'
-/// --data '{ "paths": [<list of paths>] }' # <- data is optional
+/// --data '{ "paths": [<list of paths>], "shuffle": true }' # <- data is optional
 /// ```
 ///
 /// Or with template:
@@ -124,6 +124,8 @@ pub async fn gen_playlist(
     }
     .ok_or_else(|| ServiceError::BadRequest(format!("Channel {id} not found!")))?;
 
+    let shuffle = obj.template.is_none().then_some(obj.shuffle);
+
     {
         let mut config = manager.config.write().await;
 
@@ -139,12 +141,14 @@ pub async fn gen_playlist(
             }
 
             config.storage.paths = path_list;
+        } else {
+            config.storage.paths.clear();
         }
 
         config.general.template = obj.template.clone();
     }
 
-    match generate_playlist(manager).await {
+    match generate_playlist(manager, shuffle).await {
         Ok(playlist) => Ok(Json(playlist)),
         Err(e) => Err(e),
     }

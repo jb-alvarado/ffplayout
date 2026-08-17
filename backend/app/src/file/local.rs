@@ -172,30 +172,37 @@ impl LocalStorage {
         let (mut target_path, _, _) = norm_abs_path(&root, &move_object.target)?;
 
         if !source_path.exists() {
-            return Err(ServiceError::BadRequest("Source file not exist!".into()));
+            return Err(ServiceError::BadRequest("Source does not exist!".into()));
         }
 
-        if (source_path.is_dir() || source_path.is_file())
-            && source_path.parent() == Some(&target_path)
-        {
-            return rename_only(&source_path, &target_path).await;
+        if source_path == target_path {
+            return Ok(MoveObject {
+                source: move_object.source.clone(),
+                target: move_object.target.clone(),
+            });
         }
 
         if target_path.is_dir() {
             target_path = target_path.join(source_path.file_name().unwrap());
         }
 
-        if target_path.is_file() {
+        if target_path.exists() {
+            return Err(ServiceError::BadRequest("Target already exists!".into()));
+        }
+
+        if source_path.is_dir() && target_path.starts_with(&source_path) {
             return Err(ServiceError::BadRequest(
-                "Target file already exists!".into(),
+                "A folder cannot be moved into itself!".into(),
             ));
         }
 
-        if source_path.is_file() && target_path.parent().is_some() {
-            return rename_only(&source_path, &target_path).await;
+        if !target_path.parent().is_some_and(Path::is_dir) {
+            return Err(ServiceError::BadRequest(
+                "Target folder does not exist!".into(),
+            ));
         }
 
-        Err(ServiceError::InternalServerError)
+        rename_only(&source_path, &target_path).await
     }
 
     pub async fn remove(&self, source_path: &str, recursive: bool) -> Result<(), ServiceError> {
@@ -494,7 +501,11 @@ async fn rename_only(source: &PathBuf, target: &PathBuf) -> Result<MoveObject, S
         }),
         Err(e) => {
             error!("{e}");
-            copy_and_delete(source, target).await
+            if source.is_file() {
+                copy_and_delete(source, target).await
+            } else {
+                Err(ServiceError::BadRequest("Renaming folder failed!".into()))
+            }
         }
     }
 }
@@ -532,6 +543,29 @@ async fn copy_and_delete(source: &PathBuf, target: &PathBuf) -> Result<MoveObjec
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn renames_directory_within_storage() {
+        let base = std::env::temp_dir().join(format!(
+            "ffplayout-storage-rename-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let storage = LocalStorage::new(base.clone(), Vec::new()).await.unwrap();
+        fs::create_dir(base.join("old-name")).await.unwrap();
+
+        storage
+            .rename(&MoveObject {
+                source: "old-name".to_string(),
+                target: "new-name".to_string(),
+            })
+            .await
+            .unwrap();
+
+        assert!(!base.join("old-name").exists());
+        assert!(base.join("new-name").is_dir());
+        fs::remove_dir_all(base).await.unwrap();
+    }
 
     #[tokio::test]
     async fn storage_creation_returns_error_instead_of_panicking() {

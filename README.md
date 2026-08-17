@@ -82,7 +82,7 @@ HLS is the default output mode. For production delivery, serve the generated HLS
             "out": 149,
             "duration": 149,
             "source": "/Media/clip2.mp4",
-            "category": "advertisement"
+            "ad": true
         }, {
             "in": 0,
             "out": 114.72,
@@ -93,7 +93,7 @@ HLS is the default output mode. For production delivery, serve the generated HLS
             "out": 2531.36,
             "duration": 2531.36,
             "source": "https://example.org/big_buck_bunny.webm",
-            "category": ""
+            "ad": false
         }
     ]
 }

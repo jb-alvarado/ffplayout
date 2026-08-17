@@ -242,6 +242,8 @@ pub struct DateObj {
 pub struct PathsObj {
     #[serde(default)]
     paths: Option<Vec<String>>,
+    #[serde(default)]
+    shuffle: bool,
     template: Option<Template>,
 }
 
@@ -285,5 +287,5 @@ pub struct ProgramItem {
     r#in: f64,
     out: f64,
     duration: f64,
-    category: String,
+    ad: bool,
 }

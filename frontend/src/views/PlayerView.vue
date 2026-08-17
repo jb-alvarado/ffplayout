@@ -87,7 +87,7 @@ const newSource = ref({
     in: 0,
     out: 0,
     duration: 0,
-    category: '',
+    ad: false,
     source: '',
     uid: '',
 } as PlaylistItem)
@@ -261,7 +261,7 @@ function processSource(process: boolean) {
         in: 0,
         out: 0,
         duration: 0,
-        category: '',
+        ad: false,
         source: '',
         uid: genUID(),
     }
@@ -280,17 +280,9 @@ function editPlaylistItem(i: number) {
         in: playlistStore.playlist[i]?.in ?? 0,
         out: playlistStore.playlist[i]?.out ?? 0,
         duration: playlistStore.playlist[i]?.duration ?? 0,
-        category: playlistStore.playlist[i]?.category,
+        ad: playlistStore.playlist[i]?.ad ?? false,
         source: playlistStore.playlist[i]?.source ?? '',
         uid: playlistStore.playlist[i]?.uid ?? '',
-    }
-}
-
-function isAd(evt: any) {
-    if (evt.target.checked) {
-        newSource.value.category = 'advertisement'
-    } else {
-        newSource.value.category = ''
     }
 }
 
@@ -574,8 +566,7 @@ async function deletePlaylist(del: boolean) {
                 <fieldset class="fieldset mt-2 rounded-box w-full">
                     <label class="fieldset-label text-base-content">
                         <input
-                            :checked="newSource.category === 'advertisement'"
-                            @click="isAd"
+                            v-model="newSource.ad"
                             type="checkbox"
                             class="checkbox"
                         />

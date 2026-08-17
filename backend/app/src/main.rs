@@ -201,7 +201,7 @@ async fn async_main() -> Result<(), ProcessError> {
                 manager.foreground_start(index).await?;
             } else if ARGS.generate.is_some() {
                 // Run a simple playlist generator and save it to disk.
-                generate_playlist(manager).await?;
+                generate_playlist(manager, None).await?;
             } else if ARGS.validate {
                 let mut playlist_path = config.channel.playlists.clone();
                 let start_sec = config.playlist.start_sec.unwrap_or_default();

@@ -81,7 +81,7 @@ pub fn get_media_map(media: Media) -> Value {
         "in": media.seek,
         "out": media.out,
         "duration": media.duration,
-        "category": media.category,
+        "ad": media.ad,
         "source": media.source,
     });
 
@@ -171,10 +171,11 @@ pub struct Media {
 
     #[serde(
         default,
-        deserialize_with = "null_string",
-        skip_serializing_if = "is_empty_string"
+        alias = "category",
+        deserialize_with = "deserialize_ad",
+        skip_serializing_if = "is_false"
     )]
-    pub category: String,
+    pub ad: bool,
     #[serde(deserialize_with = "null_string")]
     pub source: String,
 
@@ -232,7 +233,7 @@ impl Media {
             out: duration,
             duration,
             duration_audio: 0.0,
-            category: String::new(),
+            ad: false,
             source: src.to_string(),
             audio: String::new(),
             custom_filter: String::new(),
@@ -301,7 +302,7 @@ impl Default for Media {
             out: 0.0,
             duration: 0.0,
             duration_audio: 0.0,
-            category: String::new(),
+            ad: false,
             source: String::new(),
             audio: String::new(),
             custom_filter: String::new(),
@@ -323,7 +324,7 @@ impl PartialEq for Media {
             && self.out == other.out
             && self.duration == other.duration
             && self.source == other.source
-            && self.category == other.category
+            && self.ad == other.ad
             && self.audio == other.audio
             && self.custom_filter == other.custom_filter
     }
@@ -336,6 +337,24 @@ where
     D: Deserializer<'de>,
 {
     Deserialize::deserialize(d).map(|x: Option<_>| x.unwrap_or_default())
+}
+
+fn deserialize_ad<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    match Value::deserialize(deserializer)? {
+        Value::Bool(ad) => Ok(ad),
+        Value::String(category) => Ok(category == "advertisement"),
+        Value::Null => Ok(false),
+        value => Err(serde::de::Error::custom(format!(
+            "expected an ad boolean or legacy category string, got {value}"
+        ))),
+    }
+}
+
+const fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref)]
@@ -654,7 +673,45 @@ pub fn custom_format<T: fmt::Display>(template: &str, args: &[T]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::custom_format;
+    use serde_json::json;
+
+    use super::{Media, custom_format};
+
+    #[test]
+    fn legacy_advertisement_category_is_serialized_as_ad() {
+        let media: Media = serde_json::from_value(json!({
+            "in": 0.0,
+            "out": 10.0,
+            "duration": 10.0,
+            "category": "advertisement",
+            "source": "spot.mp4"
+        }))
+        .unwrap();
+
+        assert!(media.ad);
+
+        let serialized = serde_json::to_value(media).unwrap();
+        assert_eq!(serialized["ad"], true);
+        assert!(serialized.get("category").is_none());
+    }
+
+    #[test]
+    fn non_advertisement_legacy_category_is_not_an_ad() {
+        let media: Media = serde_json::from_value(json!({
+            "in": 0.0,
+            "out": 10.0,
+            "duration": 10.0,
+            "category": "program",
+            "source": "program.mp4"
+        }))
+        .unwrap();
+
+        assert!(!media.ad);
+
+        let serialized = serde_json::to_value(media).unwrap();
+        assert!(serialized.get("ad").is_none());
+        assert!(serialized.get("category").is_none());
+    }
 
     #[test]
     fn custom_format_keeps_escaped_braces_without_args() {
