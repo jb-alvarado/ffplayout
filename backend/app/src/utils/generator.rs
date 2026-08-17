@@ -197,8 +197,14 @@ pub async fn generate_from_template(
 }
 
 /// Generate playlists
-pub async fn playlist_generator(manager: &ChannelManager) -> Result<Vec<JsonPlaylist>, Error> {
-    let config = manager.config.read().await.clone();
+pub async fn playlist_generator(
+    manager: &ChannelManager,
+    shuffle_override: Option<bool>,
+) -> Result<Vec<JsonPlaylist>, Error> {
+    let mut config = manager.config.read().await.clone();
+    if let Some(shuffle) = shuffle_override {
+        config.storage.shuffle = shuffle;
+    }
     let id = config.general.channel_id;
     let channel_name = manager.channel.lock().await.name.clone();
 

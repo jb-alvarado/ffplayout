@@ -211,7 +211,7 @@ async fn play_loop(
         } else {
             1.0
         };
-        let is_ad = node.category == "advertisement";
+        let is_ad = node.ad;
         match playout
             .play_with_timing_logo_fade_and_rate(
                 node.source.clone(),

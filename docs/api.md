@@ -132,11 +132,17 @@ curl -X POST http://127.0.0.1:8787/api/control/1/process \
 | --- | --- | --- | --- |
 | `GET` | `/api/playlist/{id}?date=YYYY-MM-DD` | `GA, CA, U` | Read a playlist. |
 | `POST` | `/api/playlist/{id}` | `GA, CA, U` | Save a complete playlist JSON document. |
-| `POST` | `/api/playlist/{id}/generate/{date}` | `GA, CA, U` | Generate and save a playlist. Body is optional: `{ "paths": ["..."], "template": { ... } }`. |
+| `POST` | `/api/playlist/{id}/generate/{date}` | `GA, CA, U` | Generate and save a playlist. Body is optional: `{ "paths": ["..."], "shuffle": true, "template": { ... } }`. |
 | `DELETE` | `/api/playlist/{id}/{date}` | `GA, CA, U` | Delete a playlist. |
 | `GET` | `/api/program/{id}` | `GA, CA, U` | Read programme items. Optional `start_after` and `start_before` query parameters accept local ISO date-times. |
 | `GET` | `/api/log/{id}` | `GA, CA, U` | Read a log. Optional query parameters: `date`, `timezone`, `download`. |
 | `GET` | `/api/system/{id}` | `GA, CA, U` | Read system statistics for the channel. |
+
+Playlist items identify advertisements with `"ad": true`. The field is omitted
+for regular content and defaults to `false` when absent. For compatibility,
+playlist input may still contain `"category": "advertisement"`; the server
+reads it as `"ad": true` and only serializes the new field. Programme responses
+expose the resolved state as an `ad` boolean.
 
 ## Files
 
@@ -148,7 +154,7 @@ rejected.
 | --- | --- | --- |
 | `POST` | `/api/file/{id}/browse` | `{ "source": "", "folders_only": false }` |
 | `POST` | `/api/file/{id}/create-folder` | `{ "source": "folder" }` |
-| `POST` | `/api/file/{id}/rename` | `{ "source": "old.mp4", "target": "new.mp4" }` |
+| `POST` | `/api/file/{id}/rename` | Rename or move a file/folder: `{ "source": "old", "target": "new" }` |
 | `POST` | `/api/file/{id}/remove` | `{ "source": "file.mp4", "recursive": false }` |
 | `GET` | `/api/file/{id}/upload?path=folder&file_name=clip.mp4&size=1234&batch_id=<ID>` | Returns already received byte ranges for a resumable upload |
 | `PUT` | `/api/file/{id}/upload?path=folder` | Chunked `multipart/form-data` upload |

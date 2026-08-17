@@ -21,6 +21,7 @@ use crate::{
 pub struct FolderSource {
     manager: ChannelManager,
     current_node: Media,
+    shuffle: bool,
 }
 
 impl FolderSource {
@@ -83,6 +84,7 @@ impl FolderSource {
         Self {
             manager,
             current_node: Media::default(),
+            shuffle: config.storage.shuffle,
         }
     }
 
@@ -92,6 +94,7 @@ impl FolderSource {
         Self {
             manager: manager.clone(),
             current_node: Media::default(),
+            shuffle: false,
         }
     }
 
@@ -132,7 +135,7 @@ impl FolderSource {
             self.current_node.begin = Some(time_in_seconds(&config.channel.timezone));
             self.manager.current_index.fetch_add(1, Ordering::SeqCst);
         } else {
-            if config.storage.shuffle {
+            if self.shuffle {
                 if config.general.generate.is_none() {
                     info!(channel = id; "Shuffle files");
                 }

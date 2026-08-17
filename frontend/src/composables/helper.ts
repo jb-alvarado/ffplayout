@@ -225,10 +225,6 @@ export const playlistOperations = () => {
             if (forSave) {
                 delete item.date
 
-                if (!item.category) {
-                    delete item.category
-                }
-
                 if (!item.title) {
                     delete item.title
                 }

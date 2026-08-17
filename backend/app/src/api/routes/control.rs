@@ -159,7 +159,7 @@ pub async fn control_playout(
 /// ```JSON
 ///     {
 ///       "media": {
-///         "category": "",
+///         "ad": false,
 ///         "duration": 154.2,
 ///         "out": 154.2,
 ///         "in": 0.0,

@@ -98,7 +98,7 @@ pub async fn add_dir(
     Ok(StatusCode::OK)
 }
 
-/// **Rename File**
+/// **Rename File/Folder**
 ///
 /// ```BASH
 /// curl -X POST http://127.0.0.1:8787/api/file/1/rename -H 'Content-Type: application/json'

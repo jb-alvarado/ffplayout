@@ -136,7 +136,7 @@ pub async fn get_program(
                 r#in: item.seek,
                 out: item.out,
                 duration: item.duration,
-                category: item.category,
+                ad: item.ad,
             };
 
             if naive >= after && naive <= before {

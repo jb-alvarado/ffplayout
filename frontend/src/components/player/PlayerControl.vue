@@ -47,6 +47,7 @@ const currentDefault = {
     duration: 0,
     in: 0,
     out: 0,
+    ad: false,
 } as PlaylistItem
 
 playlistStore.current = currentDefault
@@ -391,7 +392,7 @@ function runControl(button: PlayerControlButton) {
                                 v-else
                                 class="h-1/4 font-bold text truncate content-center leading-5"
                                 :class="{
-                                    'text-base-content/60': playlistStore.current.category === 'advertisement',
+                                    'text-base-content/60': playlistStore.current.ad,
                                 }"
                                 :title="playlistStore.current.title || filename(playlistStore.current.source)"
                             >

@@ -295,11 +295,11 @@ impl CurrentProgram {
         let list = self.manager.current_list.lock().await;
         let length = list.len();
 
-        if index + 1 < length && &list[index + 1].category == "advertisement" {
+        if index + 1 < length && list[index + 1].ad {
             node.next_ad = true;
         }
 
-        if index > 0 && index < length && &list[index - 1].category == "advertisement" {
+        if index > 0 && index < length && list[index - 1].ad {
             node.last_ad = true;
         }
     }

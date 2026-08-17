@@ -94,7 +94,10 @@ pub async fn write_playlist(
     Err(ServiceError::InternalServerError)
 }
 
-pub async fn generate_playlist(manager: ChannelManager) -> Result<JsonPlaylist, ServiceError> {
+pub async fn generate_playlist(
+    manager: ChannelManager,
+    shuffle_override: Option<bool>,
+) -> Result<JsonPlaylist, ServiceError> {
     let (template, storage_root) = {
         let mut config = manager.config.write().await;
         (
@@ -121,7 +124,7 @@ pub async fn generate_playlist(manager: ChannelManager) -> Result<JsonPlaylist, 
         }
     }
 
-    match playlist_generator(&manager).await {
+    match playlist_generator(&manager, shuffle_override).await {
         Ok(playlists) => {
             if playlists.is_empty() {
                 Err(ServiceError::Conflict(
