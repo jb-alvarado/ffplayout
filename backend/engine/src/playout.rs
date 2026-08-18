@@ -15,6 +15,7 @@ use crate::{
     output::FrameOutput,
     utils::{
         config::{OutputConfig, TextOverlayState},
+        ffmpeg::{make_video_frame_writable, reference_video_frame},
         helper::{even, open_media_input},
     },
 };
@@ -661,9 +662,10 @@ fn repeat_single_video_frame_to_limit<O: FrameOutput>(
     if repeat_frames == 0 {
         return Ok(());
     }
-    let Some(frame) = video.last_output_frame.clone() else {
+    let Some(frame) = video.last_output_frame.as_ref() else {
         return Ok(());
     };
+    let pristine = reference_video_frame(frame)?;
 
     debug!(
         "holding single decoded video frame for {repeat_frames} frame(s) ({:.6} s)",
@@ -672,17 +674,16 @@ fn repeat_single_video_frame_to_limit<O: FrameOutput>(
 
     while timeline.video_pts < limit_pts {
         check_playback_control(playback_control)?;
-        let mut frame = frame.clone();
-        apply_video_fade(
-            &mut frame,
-            media_fade_plan.video_opacity_at(timeline.video_pts),
-        );
-        apply_overlays(&mut frame, video, timeline, logo_fade_plan, output);
-        frame.set_pts(Some(timeline.video_pts));
-        output.encode_video(&frame)?;
-        video.last_composited_frame = Some(frame);
-        timeline.video_pts += 1;
-        *decoded_frames += 1;
+        let frame = reference_video_frame(&pristine)?;
+        encode_composited_frame(
+            frame,
+            video,
+            timeline,
+            media_fade_plan,
+            logo_fade_plan,
+            output,
+            decoded_frames,
+        )?;
     }
 
     Ok(())
@@ -779,35 +780,91 @@ fn receive_video_frames<O: FrameOutput>(
             scaled
         };
         // Only the first decoded frame can become the single-frame repeat
-        // source (see `repeat_single_video_frame_to_limit`); keeping a copy of
-        // every frame would cost a full-frame memcpy per output frame.
+        // source. Keep its pristine buffer referenced; copy-on-write below
+        // allocates another buffer only if compositing changes its pixels.
         if *decoded_frames == 0 {
-            video.last_output_frame = Some(pristine.clone());
+            video.last_output_frame = Some(reference_video_frame(&pristine)?);
         }
-        for _ in 0..output_frames {
+        if output_frames == 1 {
+            // Pass the scaler result directly. The compositing helper keeps
+            // it shared when possible and handles copy-on-write when the
+            // single-frame repeat source or another owner aliases it.
             check_playback_control(playback_control)?;
             if limit_pts.is_some_and(|limit| timeline.video_pts >= limit) {
                 return Ok(());
             }
-
-            // Overlays must be blended onto a fresh copy: blending in place
-            // onto the shared buffer would stack the logo (and scrolling text
-            // positions) on top of each other for duplicated frames during
-            // frame-rate up-conversion.
-            let mut frame = pristine.clone();
-            apply_video_fade(
-                &mut frame,
-                media_fade_plan.video_opacity_at(timeline.video_pts),
-            );
-            apply_overlays(&mut frame, video, timeline, logo_fade_plan, output);
-            frame.set_pts(Some(timeline.video_pts));
-            output.encode_video(&frame)?;
-            video.last_composited_frame = Some(frame);
-            timeline.video_pts += 1;
-            *decoded_frames += 1;
+            encode_composited_frame(
+                pristine,
+                video,
+                timeline,
+                media_fade_plan,
+                logo_fade_plan,
+                output,
+                decoded_frames,
+            )?;
+        } else {
+            // Frame-rate up-conversion can share the pristine pixels. The
+            // compositing helper requests a writable buffer only when an
+            // active effect actually changes them.
+            for _ in 0..output_frames {
+                check_playback_control(playback_control)?;
+                if limit_pts.is_some_and(|limit| timeline.video_pts >= limit) {
+                    return Ok(());
+                }
+                let frame = reference_video_frame(&pristine)?;
+                encode_composited_frame(
+                    frame,
+                    video,
+                    timeline,
+                    media_fade_plan,
+                    logo_fade_plan,
+                    output,
+                    decoded_frames,
+                )?;
+            }
         }
     }
     Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn encode_composited_frame<O: FrameOutput>(
+    mut frame: frame::Video,
+    video: &mut VideoDecoder,
+    timeline: &mut Timeline,
+    media_fade_plan: MediaFadePlan,
+    logo_fade_plan: LogoFadePlan,
+    output: &mut O,
+    decoded_frames: &mut i64,
+) -> Result<()> {
+    video.update_runtime_text(timeline.video_pts, timeline.text_pts);
+    let video_opacity = media_fade_plan.video_opacity_at(timeline.video_pts);
+    let changes_pixels = video_frame_needs_write(
+        video_opacity,
+        video.logo.is_some(),
+        video.text.is_some(),
+        video.runtime_text.is_some(),
+    );
+    if changes_pixels {
+        make_video_frame_writable(&mut frame)?;
+    }
+    apply_video_fade(&mut frame, video_opacity);
+    apply_overlays(&mut frame, video, timeline, logo_fade_plan, output);
+    frame.set_pts(Some(timeline.video_pts));
+    output.encode_video(&frame)?;
+    video.last_composited_frame = Some(frame);
+    timeline.video_pts += 1;
+    *decoded_frames += 1;
+    Ok(())
+}
+
+fn video_frame_needs_write(
+    opacity: f32,
+    has_logo: bool,
+    has_static_text: bool,
+    has_runtime_text: bool,
+) -> bool {
+    opacity < 1.0 || has_logo || has_static_text || has_runtime_text
 }
 
 fn apply_overlays(
@@ -835,7 +892,6 @@ fn apply_overlays(
             text.blend(frame, timeline.video_pts, timeline.text_pts);
         });
     }
-    video.update_runtime_text(timeline.video_pts, timeline.text_pts);
     if let Some(text) = &mut video.runtime_text {
         let (width, height) = text.dimensions();
         benchmark::measure_overlay(Stage::TextRuntime, width, height, || {
@@ -1730,6 +1786,7 @@ mod tests {
         Timeline, apply_audio_fade, fallback_video_time_base, fit_dimensions, has_valid_time_base,
         padding_to_sync, parse_duration_us, play_clip, resample_audio_frame,
         should_play_loop_iteration, single_frame_repeat_frames, synchronize_after_skip,
+        video_frame_needs_write,
     };
     use crate::{
         output::FrameOutput,
@@ -1776,6 +1833,15 @@ mod tests {
             self.skip_target = Some((video_pts, audio_pts));
             Ok(self.reset_on_skip)
         }
+    }
+
+    #[test]
+    fn video_frame_only_needs_write_for_active_pixel_effects() {
+        assert!(!video_frame_needs_write(1.0, false, false, false));
+        assert!(video_frame_needs_write(0.5, false, false, false));
+        assert!(video_frame_needs_write(1.0, true, false, false));
+        assert!(video_frame_needs_write(1.0, false, true, false));
+        assert!(video_frame_needs_write(1.0, false, false, true));
     }
 
     fn media_mix_asset(name: &str) -> String {

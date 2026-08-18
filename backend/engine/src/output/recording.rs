@@ -13,7 +13,7 @@ use ffmpeg::{codec, format, util::rational::Rational};
 use ffmpeg_next as ffmpeg;
 use sysinfo::{Disk, Disks};
 
-use crate::RecordingConfig;
+use crate::{RecordingConfig, utils::ffmpeg::reference_packet};
 
 static RECORDING_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -101,7 +101,10 @@ impl RecordingMuxer {
             .stream(stream_index)
             .context("recording output stream is missing")?
             .time_base();
-        let mut packet = packet.clone();
+        // Only the packet header is changed below. Keep the encoded payload
+        // shared instead of using ffmpeg-next's Clone implementation, which
+        // also calls av_packet_make_writable and may copy the payload.
+        let mut packet = reference_packet(packet)?;
         packet.set_stream(stream_index);
         packet.rescale_ts(encoder_time_base, stream_time_base);
         packet.write_interleaved(&mut self.octx)?;

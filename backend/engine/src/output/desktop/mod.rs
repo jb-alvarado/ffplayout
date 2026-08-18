@@ -33,7 +33,10 @@ use crate::{
     audio_mixer::{AudioEffectChain, AudioEffectsControl},
     benchmark::{self, BenchHandle, Stage},
     compositor::logo::{LogoOverlay, blend_logo},
-    utils::config::{DesktopControlCallback, DesktopControlCommand, OutputConfig},
+    utils::{
+        config::{DesktopControlCallback, DesktopControlCommand, OutputConfig},
+        ffmpeg::reference_video_frame,
+    },
 };
 
 mod audio;
@@ -73,6 +76,9 @@ const VIDEO_STARVATION_GRACE_FRAMES: i64 = 2;
 const SCHEDULER_INTERVAL: Duration = Duration::from_millis(2);
 const VIDEO_CHANNEL_CAPACITY: usize = 8;
 const AUDIO_CHANNEL_CAPACITY: usize = 32;
+const AUDIO_BUFFER_POOL_CAPACITY: usize = AUDIO_CHANNEL_CAPACITY;
+const AUDIO_BUFFER_MAX_RETAINED_CAPACITY: usize =
+    AUDIO_DEVICE_BUFFER_SAMPLES as usize * AUDIO_CHANNELS * 4;
 const RECORDING_CHANNEL_CAPACITY: usize = 64;
 const RECORDING_OVERLOAD_LOG_INTERVAL: Duration = Duration::from_secs(30);
 const DESKTOP_DOUBLE_CLICK_INTERVAL: Duration = Duration::from_millis(500);
@@ -165,6 +171,7 @@ pub(crate) struct DesktopFrameSender {
     control_sender: SyncSender<DesktopControlMessage>,
     discontinuity_sender: SyncSender<DesktopDiscontinuity>,
     audio_effects: Arc<Mutex<AudioEffectChain>>,
+    audio_buffer_pool: Arc<Mutex<Vec<Vec<f32>>>>,
     audio_level_meter: AudioLevelMeter,
     loudness_meter: LoudnessMeter,
     current_logo_opacity: f64,
@@ -307,6 +314,7 @@ struct DesktopRenderer {
     audio_effects_control: AudioEffectsControl,
     video_queue: VecDeque<frame::Video>,
     pending_audio: VecDeque<(Vec<f32>, usize)>,
+    audio_buffer_pool: Arc<Mutex<Vec<Vec<f32>>>>,
     pending_audio_samples: u64,
     pending_silence_samples: u64,
     submitted_audio_samples: u64,
@@ -400,6 +408,7 @@ impl DesktopOutput {
         let (control_sender, control_receiver) = sync_channel(CONTROL_CHANNEL_CAPACITY);
         let (discontinuity_sender, discontinuity_receiver) = sync_channel(1);
         let audio_effects = Arc::clone(&self.audio_effects);
+        let audio_buffer_pool = Arc::clone(&self.renderer.audio_buffer_pool);
         let audio_level_callback = self.audio_level_callback.clone();
         let loudness_meter_control = self.loudness_meter_control.clone();
         let audio_sample_rate = self.audio_sample_rate;
@@ -427,6 +436,7 @@ impl DesktopOutput {
                     control_sender,
                     discontinuity_sender,
                     audio_effects,
+                    audio_buffer_pool,
                     audio_level_meter: AudioLevelMeter::new(
                         audio_sample_rate,
                         audio_level_callback,
@@ -502,10 +512,11 @@ impl FrameOutput for DesktopFrameSender {
     }
 
     fn encode_video(&mut self, frame: &frame::Video) -> Result<()> {
+        let desktop_frame = reference_video_frame(frame)?;
         let recording_slot = self.reserve_recording_slot();
         let desktop_send = benchmark::measure(Stage::DesktopSend, || {
             self.video_sender.send(DesktopVideoMessage {
-                frame: frame.clone(),
+                frame: desktop_frame,
                 logo_opacity: self.current_logo_opacity,
             })
         });
@@ -563,7 +574,8 @@ impl FrameOutput for DesktopFrameSender {
                 self.loudness_meter.process_frame(&frame);
                 let left = frame.plane::<f32>(0);
                 let right = frame.plane::<f32>(1);
-                let mut interleaved = Vec::with_capacity(frame.samples() * AUDIO_CHANNELS);
+                let mut interleaved =
+                    take_audio_buffer(&self.audio_buffer_pool, frame.samples() * AUDIO_CHANNELS);
                 for (left, right) in left.iter().zip(right) {
                     interleaved.push(if left.is_finite() { *left } else { 0.0 });
                     interleaved.push(if right.is_finite() { *right } else { 0.0 });
@@ -723,14 +735,29 @@ impl DesktopFrameSender {
     }
 }
 
-fn reference_video_frame(source: &frame::Video) -> Result<frame::Video> {
-    let mut referenced = frame::Video::empty();
-    let result =
-        unsafe { ffmpeg_next::ffi::av_frame_ref(referenced.as_mut_ptr(), source.as_ptr()) };
-    if result < 0 {
-        return Err(ffmpeg_next::Error::from(result).into());
+fn take_audio_buffer(pool: &Mutex<Vec<Vec<f32>>>, capacity: usize) -> Vec<f32> {
+    let mut samples = pool
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .pop()
+        .unwrap_or_default();
+    samples.clear();
+    if samples.capacity() < capacity {
+        samples.reserve(capacity - samples.capacity());
     }
-    Ok(referenced)
+    samples
+}
+
+fn return_audio_buffer(pool: &Mutex<Vec<Vec<f32>>>, mut samples: Vec<f32>) {
+    samples.clear();
+    if samples.capacity() > AUDIO_BUFFER_MAX_RETAINED_CAPACITY {
+        return;
+    }
+
+    let mut pool = pool.lock().unwrap_or_else(PoisonError::into_inner);
+    if pool.len() < AUDIO_BUFFER_POOL_CAPACITY {
+        pool.push(samples);
+    }
 }
 
 impl DesktopRenderer {
@@ -756,6 +783,7 @@ impl DesktopRenderer {
             audio_effects_control: cfg.audio_effects.clone(),
             video_queue: VecDeque::with_capacity(VIDEO_CHANNEL_CAPACITY),
             pending_audio: VecDeque::new(),
+            audio_buffer_pool: Arc::new(Mutex::new(Vec::with_capacity(AUDIO_BUFFER_POOL_CAPACITY))),
             pending_audio_samples: 0,
             pending_silence_samples: 0,
             submitted_audio_samples: 0,
@@ -934,7 +962,7 @@ impl DesktopRenderer {
         self.audio.pause();
         self.audio.clear();
         self.video_queue.clear();
-        self.pending_audio.clear();
+        self.recycle_pending_audio();
         self.pending_audio_samples = 0;
         self.pending_silence_samples = 0;
         self.submitted_audio_samples = audio_pts;
@@ -991,6 +1019,7 @@ impl DesktopRenderer {
                 break;
             };
             self.audio.queue(&samples)?;
+            self.recycle_audio_buffer(samples);
             self.pending_audio_samples = self
                 .pending_audio_samples
                 .saturating_sub(samples_per_channel as u64);
@@ -1003,13 +1032,26 @@ impl DesktopRenderer {
             && self.queued_audio_samples() < self.max_queue_samples()
         {
             let samples = self.pending_silence_samples.min(1_024) as usize;
-            self.audio.queue(&vec![0.0; samples * AUDIO_CHANNELS])?;
+            let mut silence = take_audio_buffer(&self.audio_buffer_pool, samples * AUDIO_CHANNELS);
+            silence.resize(samples * AUDIO_CHANNELS, 0.0);
+            self.audio.queue(&silence)?;
+            self.recycle_audio_buffer(silence);
             self.pending_silence_samples -= samples as u64;
             self.submitted_audio_samples =
                 self.submitted_audio_samples.saturating_add(samples as u64);
         }
         self.start_audio_if_ready(false);
         Ok(())
+    }
+
+    fn recycle_pending_audio(&mut self) {
+        while let Some((samples, _)) = self.pending_audio.pop_front() {
+            self.recycle_audio_buffer(samples);
+        }
+    }
+
+    fn recycle_audio_buffer(&self, samples: Vec<f32>) {
+        return_audio_buffer(&self.audio_buffer_pool, samples);
     }
 
     fn apply_audio_padding(&mut self, samples: u64) {
@@ -2009,6 +2051,18 @@ mod tests {
     }
 
     #[test]
+    fn audio_buffer_pool_reuses_normal_buffers_and_drops_oversized_ones() {
+        let pool = Mutex::new(Vec::new());
+        let reusable = Vec::<f32>::with_capacity(AUDIO_BUFFER_MAX_RETAINED_CAPACITY);
+        return_audio_buffer(&pool, reusable);
+        assert_eq!(pool.lock().expect("audio pool lock").len(), 1);
+
+        let oversized = Vec::<f32>::with_capacity(AUDIO_BUFFER_MAX_RETAINED_CAPACITY + 1);
+        return_audio_buffer(&pool, oversized);
+        assert_eq!(pool.lock().expect("audio pool lock").len(), 1);
+    }
+
+    #[test]
     fn only_drops_frames_that_are_severely_late() {
         assert!(!video_frame_is_too_late(10, 13, 2));
         assert!(video_frame_is_too_late(10, 14, 2));
@@ -2046,7 +2100,7 @@ mod tests {
         let video = VideoSurface {
             width: 2,
             height: 2,
-            pixels: Arc::from([1, 2, 3, 4]),
+            pixels: Arc::new(video::RecyclableBuffer::unpooled(vec![1, 2, 3, 4])),
             pts: 0,
         };
         let mut target = [0; 4];
