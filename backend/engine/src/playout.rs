@@ -1665,7 +1665,9 @@ fn write_padding_video_frames<O: FrameOutput>(
 ) -> Result<()> {
     if let Some(last_video_frame) = last_video_frame {
         for _ in 0..frames {
-            let mut frame = last_video_frame.clone();
+            // The frame is already fully composited. Padding only changes its
+            // header PTS, so all duplicates can safely share the pixel buffer.
+            let mut frame = reference_video_frame(last_video_frame)?;
             frame.set_pts(Some(timeline.video_pts));
             output.encode_video(&frame)?;
             timeline.video_pts += 1;
@@ -1779,14 +1781,14 @@ fn write_silence<O: FrameOutput>(
 #[cfg(test)]
 mod tests {
     use anyhow::Result;
-    use ffmpeg_next::{codec, frame, media};
+    use ffmpeg_next::{codec, frame, media, util::format::pixel::Pixel};
 
     use super::{
         AudioDecoder, FrameRateConverter, LogoFade, MediaFadePlan, PlaybackControl, Rational,
         Timeline, apply_audio_fade, fallback_video_time_base, fit_dimensions, has_valid_time_base,
         padding_to_sync, parse_duration_us, play_clip, resample_audio_frame,
         should_play_loop_iteration, single_frame_repeat_frames, synchronize_after_skip,
-        video_frame_needs_write,
+        video_frame_needs_write, write_padding_video_frames,
     };
     use crate::{
         output::FrameOutput,
@@ -1796,6 +1798,7 @@ mod tests {
     #[derive(Default)]
     struct RecordingOutput {
         video_frames: Vec<(u32, u32, i64)>,
+        video_data_ptrs: Vec<usize>,
         audio_samples: usize,
         audio_frame_samples: Vec<usize>,
         events: Vec<&'static str>,
@@ -1809,6 +1812,7 @@ mod tests {
         }
 
         fn encode_video(&mut self, frame: &frame::Video) -> Result<()> {
+            self.video_data_ptrs.push(frame.data(0).as_ptr() as usize);
             self.video_frames.push((
                 frame.width(),
                 frame.height(),
@@ -1860,6 +1864,27 @@ mod tests {
     #[test]
     fn pads_short_video_to_audio_duration() {
         assert_eq!(padding_to_sync(49, 96_000, 25, 48_000).unwrap(), (1, 0));
+    }
+
+    #[test]
+    fn video_padding_shares_composited_pixel_buffer() {
+        let cfg = OutputConfig::new(4, 4, 25, 48_000);
+        let mut timeline = Timeline::new();
+        let mut output = RecordingOutput::default();
+        let frame = frame::Video::new(Pixel::YUV420P, 4, 4);
+        let source_data = frame.data(0).as_ptr() as usize;
+
+        write_padding_video_frames(&cfg, &mut timeline, &mut output, 3, Some(&frame)).unwrap();
+
+        assert_eq!(output.video_data_ptrs, vec![source_data; 3]);
+        assert_eq!(
+            output
+                .video_frames
+                .iter()
+                .map(|(_, _, pts)| *pts)
+                .collect::<Vec<_>>(),
+            [0, 1, 2]
+        );
     }
 
     #[test]
