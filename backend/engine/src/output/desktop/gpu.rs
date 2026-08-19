@@ -12,7 +12,7 @@ use super::{
     DESKTOP_VOLUME_MAX,
     graphics::RgbaBitmap,
     render::{Rect, WindowFrame, fit_rect, help_panel_rect, logo_rect, subtitle_rect},
-    video::VideoSurface,
+    video::{RecyclableBuffer, VideoSurface},
 };
 
 pub(super) type WindowRenderer = WgpuRenderer;
@@ -265,7 +265,7 @@ struct GpuYuvRenderer {
     output_is_srgb: bool,
     textures: Option<GpuYuvTextures>,
     last_pts: Option<i64>,
-    last_y_plane: Option<Arc<[u8]>>,
+    last_y_plane: Option<Arc<RecyclableBuffer<u8>>>,
 }
 
 #[cfg(feature = "desktop-gpu")]

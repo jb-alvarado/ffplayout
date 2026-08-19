@@ -1,5 +1,6 @@
 pub mod clock;
 pub mod config;
+pub(crate) mod ffmpeg;
 pub mod ffmpeg_capabilities;
 pub mod helper;
 pub mod logging;

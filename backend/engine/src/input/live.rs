@@ -28,7 +28,11 @@ use crate::{
     compositor::logo::LogoOverlay,
     output::FrameOutput,
     playout::{InputPlaybackOptions, LogoFadePlan, Timeline, play_opened_input},
-    utils::{config::OutputConfig, logging},
+    utils::{
+        config::OutputConfig,
+        ffmpeg::{make_audio_frame_writable, reference_audio_frame, reference_video_frame},
+        logging,
+    },
 };
 
 const LIVE_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
@@ -311,9 +315,10 @@ impl<'a, O: FrameOutput> LiveOverrideOutput<'a, O> {
         // large. Cap it so the output never gets stuck writing filler.
         let duration = duration.min(Duration::from_secs_f64(MAX_LIVE_GAP_SECONDS));
         let video_frames = (duration.as_secs_f64() * f64::from(self.live.fps)).ceil() as i64;
-        if let Some(last_video_frame) = self.live.last_video_frame.clone() {
+        if let Some(last_video_frame) = self.live.last_video_frame.as_ref() {
+            let last_video_frame = reference_video_frame(last_video_frame)?;
             for _ in 0..video_frames {
-                let mut frame = last_video_frame.clone();
+                let mut frame = reference_video_frame(&last_video_frame)?;
                 frame.set_pts(Some(self.live.video_pts));
                 self.output.encode_video(&frame)?;
                 self.remember_video_frame(frame, self.live.video_pts);
@@ -353,12 +358,13 @@ impl<'a, O: FrameOutput> LiveOverrideOutput<'a, O> {
         let Some(mut fill_pts) = self.live.last_video_output_pts.map(|pts| pts + 1) else {
             return Ok(());
         };
-        let Some(last_video_frame) = self.live.last_video_frame.clone() else {
+        let Some(last_video_frame) = self.live.last_video_frame.as_ref() else {
             return Ok(());
         };
+        let last_video_frame = reference_video_frame(last_video_frame)?;
 
         while fill_pts < next_pts {
-            let mut frame = last_video_frame.clone();
+            let mut frame = reference_video_frame(&last_video_frame)?;
             frame.set_pts(Some(fill_pts));
             self.output.encode_video(&frame)?;
             self.remember_video_frame(frame, fill_pts);
@@ -501,6 +507,7 @@ impl<'a, O: FrameOutput> LiveOverrideOutput<'a, O> {
         frame.set_pts(Some(pts));
         self.sync_loudness_processor();
         if let Some(loudness) = &mut self.live.loudness {
+            make_audio_frame_writable(&mut frame)?;
             loudness.process(&mut frame);
             self.live.loudness_control.set_metrics(loudness.metrics());
         }
@@ -630,7 +637,7 @@ impl<O: FrameOutput> FrameOutput for LiveOverrideOutput<'_, O> {
         }
         self.wait_for_file_playback()?;
 
-        let mut frame = frame.clone();
+        let mut frame = reference_video_frame(frame)?;
         let pts = self.file_video_pts(frame.pts().unwrap_or(self.live.video_pts));
         self.fill_video_until(pts)?;
         frame.set_pts(Some(pts));
@@ -648,7 +655,7 @@ impl<O: FrameOutput> FrameOutput for LiveOverrideOutput<'_, O> {
         }
         self.wait_for_file_playback()?;
 
-        let mut frame = frame.clone();
+        let mut frame = reference_audio_frame(frame)?;
         let samples = frame.samples() as i64;
         let pts = self.file_audio_pts(frame.pts().unwrap_or(self.live.audio_pts));
         self.fill_audio_until(pts)?;
@@ -742,13 +749,19 @@ impl FrameOutput for LiveFrameSender {
     }
 
     fn encode_video(&mut self, frame: &frame::Video) -> Result<()> {
-        self.send_frame(LiveEvent::Video(self.session_id, frame.clone()))
-            .context("failed to send live video frame")
+        self.send_frame(LiveEvent::Video(
+            self.session_id,
+            reference_video_frame(frame)?,
+        ))
+        .context("failed to send live video frame")
     }
 
     fn encode_audio(&mut self, frame: &frame::Audio) -> Result<()> {
-        self.send_frame(LiveEvent::Audio(self.session_id, frame.clone()))
-            .context("failed to send live audio frame")
+        self.send_frame(LiveEvent::Audio(
+            self.session_id,
+            reference_audio_frame(frame)?,
+        ))
+        .context("failed to send live audio frame")
     }
 }
 
