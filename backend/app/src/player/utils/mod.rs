@@ -44,7 +44,7 @@ pub type SilenceDetection = ff_engine::SilenceDetection;
 /// duration assigned by the playlist editor when an image is dropped into it.
 pub const DEFAULT_IMAGE_DURATION: f64 = 10.0;
 
-fn is_image_source(source: &str) -> bool {
+pub(crate) fn is_image_source(source: &str) -> bool {
     let source = source.split('?').next().unwrap_or(source);
     let Some(extension) = Path::new(source).extension().and_then(OsStr::to_str) else {
         return false;
