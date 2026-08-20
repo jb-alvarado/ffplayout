@@ -40,6 +40,34 @@ pub use json_serializer::{JsonPlaylist, read_json};
 pub type MediaProbe = ff_engine::EngineMediaProbe;
 pub type SilenceDetection = ff_engine::SilenceDetection;
 
+/// Still images have no inherent media duration. Keep this aligned with the
+/// duration assigned by the playlist editor when an image is dropped into it.
+pub const DEFAULT_IMAGE_DURATION: f64 = 10.0;
+
+fn is_image_source(source: &str) -> bool {
+    let source = source.split('?').next().unwrap_or(source);
+    let Some(extension) = Path::new(source).extension().and_then(OsStr::to_str) else {
+        return false;
+    };
+
+    matches!(
+        extension.to_ascii_lowercase().as_str(),
+        "apng"
+            | "avif"
+            | "bmp"
+            | "exr"
+            | "gif"
+            | "jpeg"
+            | "jpg"
+            | "png"
+            | "psd"
+            | "tga"
+            | "tif"
+            | "tiff"
+            | "webp"
+    )
+}
+
 pub async fn probe_media(input: impl AsRef<std::path::Path>) -> Result<MediaProbe, ProcessError> {
     let path = input.as_ref().to_string_lossy().to_string();
     ff_engine::probe_media(&path).map_err(|error| ProcessError::Ffprobe(error.to_string()))
@@ -213,7 +241,9 @@ pub struct Media {
 
 impl Media {
     pub async fn new(index: usize, src: &str, do_probe: bool) -> Self {
-        let mut duration = 0.0;
+        let mut duration = is_image_source(src)
+            .then_some(DEFAULT_IMAGE_DURATION)
+            .unwrap_or_default();
         let mut probe = None;
 
         if do_probe
@@ -249,6 +279,16 @@ impl Media {
 
     pub async fn add_probe(&mut self, check_audio: bool) -> Result<(), String> {
         let mut errors = vec![];
+
+        if self.duration <= 0.0 && is_image_source(&self.source) {
+            // A scheduled image may have an explicit `out` duration in a
+            // playlist. Images are looped by the engine, so treat that as its
+            // usable duration; otherwise use the same default as the editor.
+            self.duration = self.out.max(DEFAULT_IMAGE_DURATION);
+            if self.out <= 0.0 {
+                self.out = self.duration;
+            }
+        }
 
         if self.probe.is_none() {
             match probe_media(&self.source).await {
@@ -675,7 +715,15 @@ pub fn custom_format<T: fmt::Display>(template: &str, args: &[T]) -> String {
 mod tests {
     use serde_json::json;
 
-    use super::{Media, custom_format};
+    use super::{DEFAULT_IMAGE_DURATION, Media, custom_format};
+
+    #[tokio::test]
+    async fn images_receive_a_default_playout_duration() {
+        let media = Media::new(0, "still.jpg", false).await;
+
+        assert_eq!(media.duration, DEFAULT_IMAGE_DURATION);
+        assert_eq!(media.out, DEFAULT_IMAGE_DURATION);
+    }
 
     #[test]
     fn legacy_advertisement_category_is_serialized_as_ad() {
