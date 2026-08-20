@@ -6,6 +6,7 @@ use std::{
 #[cfg(target_family = "unix")]
 use std::os::unix::fs::MetadataExt;
 
+use async_trait::async_trait;
 use async_walkdir::WalkDir;
 use axum::extract::Multipart;
 use lexical_sort::{PathSort, natural_lexical_cmp};
@@ -19,7 +20,8 @@ use tokio::{
 use tokio_stream::StreamExt;
 
 use crate::file::{
-    MoveObject, PathObject, VideoFile, norm_abs_path,
+    MoveObject, PathObject, PlaybackSource, Storage, StorageCapabilities, StorageEntry,
+    norm_abs_path,
     upload::{
         UploadStatus, UploadStatusQuery, finalize_upload, get_or_create_upload, received_ranges,
         sanitize_upload_filename, validate_chunk, validate_upload_metadata, write_upload_chunk,
@@ -52,6 +54,83 @@ impl LocalStorage {
             extensions: Arc::new(RwLock::new(extensions)),
             watch_handler: Arc::new(Mutex::new(None)),
         })
+    }
+}
+
+#[async_trait]
+impl Storage for LocalStorage {
+    fn capabilities(&self) -> StorageCapabilities {
+        StorageCapabilities {
+            browse: true,
+            write: true,
+            move_entry: true,
+            recursive_delete: true,
+            direct_playback_url: false,
+            supports_range_requests: false,
+            watch_changes: true,
+        }
+    }
+
+    async fn browser(&self, path_obj: &PathObject) -> Result<PathObject, ServiceError> {
+        LocalStorage::browser(self, path_obj).await
+    }
+
+    async fn mkdir(&self, path_obj: &PathObject) -> Result<(), ServiceError> {
+        LocalStorage::mkdir(self, path_obj).await
+    }
+
+    async fn rename(&self, move_object: &MoveObject) -> Result<MoveObject, ServiceError> {
+        LocalStorage::rename(self, move_object).await
+    }
+
+    async fn remove(&self, source_path: &str, recursive: bool) -> Result<(), ServiceError> {
+        LocalStorage::remove(self, source_path, recursive).await
+    }
+
+    async fn resolve_playback(&self, key: &str) -> Result<PlaybackSource, ServiceError> {
+        let (path, _, _) = norm_abs_path(&self.root.read().await, key)?;
+        Ok(PlaybackSource::LocalPath(path))
+    }
+
+    async fn upload_status(
+        &self,
+        query: &UploadStatusQuery,
+        user_id: i32,
+    ) -> Result<UploadStatus, ServiceError> {
+        LocalStorage::upload_status(self, query, user_id).await
+    }
+
+    async fn upload(&self, data: Multipart, path: &Path, user_id: i32) -> Result<(), ServiceError> {
+        LocalStorage::upload(self, data, path, user_id).await
+    }
+
+    async fn watchman(
+        &self,
+        config: PlayoutConfig,
+        is_alive: Arc<AtomicBool>,
+        sources: Arc<Mutex<Vec<Media>>>,
+    ) {
+        LocalStorage::watchman(self, config, is_alive, sources).await;
+    }
+
+    async fn stop_watch(&self) {
+        LocalStorage::stop_watch(self).await;
+    }
+
+    async fn fill_filler_list(
+        &self,
+        config: &PlayoutConfig,
+        fillers: Option<Arc<Mutex<Vec<Media>>>>,
+    ) -> Vec<Media> {
+        LocalStorage::fill_filler_list(self, config, fillers).await
+    }
+
+    async fn set_extensions(&self, extensions: Vec<String>) {
+        *self.extensions.write().await = extensions;
+    }
+
+    async fn copy_assets(&self) -> Result<(), ServiceError> {
+        LocalStorage::copy_assets(self).await.map_err(Into::into)
     }
 }
 
@@ -135,9 +214,9 @@ impl LocalStorage {
                 Ok(probe) => {
                     let duration = probe.format.duration.unwrap_or_default();
 
-                    let video = VideoFile {
+                    let video = StorageEntry {
                         name: file.file_name().unwrap().to_string_lossy().to_string(),
-                        duration,
+                        duration: Some(duration),
                     };
                     media_files.push(video);
                 }
@@ -580,5 +659,44 @@ mod tests {
 
         assert!(matches!(result, Err(ServiceError::Conflict(_))));
         fs::remove_file(base).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn local_storage_is_usable_through_storage_interface() {
+        let base = std::env::temp_dir().join(format!(
+            "ffplayout-storage-interface-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let storage: Arc<dyn Storage> =
+            Arc::new(LocalStorage::new(base.clone(), Vec::new()).await.unwrap());
+
+        storage.set_extensions(vec!["mp4".to_string()]).await;
+        assert_eq!(
+            storage.capabilities(),
+            StorageCapabilities {
+                browse: true,
+                write: true,
+                move_entry: true,
+                recursive_delete: true,
+                direct_playback_url: false,
+                supports_range_requests: false,
+                watch_changes: true,
+            }
+        );
+        storage
+            .mkdir(&PathObject {
+                source: "folder".to_string(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        assert!(base.join("folder").is_dir());
+        assert_eq!(
+            storage.resolve_playback("folder").await.unwrap(),
+            PlaybackSource::LocalPath(base.join("folder"))
+        );
+        fs::remove_dir_all(base).await.unwrap();
     }
 }

@@ -3,6 +3,7 @@ import { authFetch } from '@/composables/authFetch'
 type FileAccessResponse = {
     access: string
     expires_in_seconds: number
+    url?: string
 }
 
 function fileUrl(channelId: number | undefined, path: string, access: string): string {
@@ -27,5 +28,5 @@ export async function createFilePreviewUrl(
         body: JSON.stringify({ filename: path }),
     })
 
-    return fileUrl(channelId, path, token.access)
+    return token.url ?? fileUrl(channelId, path, token.access)
 }

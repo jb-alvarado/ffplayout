@@ -11,6 +11,7 @@ pub mod db;
 pub mod file;
 pub mod middleware;
 pub mod player;
+pub mod plugins;
 pub mod sse;
 pub mod utils;
 

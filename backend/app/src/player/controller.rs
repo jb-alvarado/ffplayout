@@ -1,6 +1,5 @@
 use std::{
     cmp, fmt,
-    path::Path,
     sync::{
         Arc, Mutex as StdMutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -24,7 +23,7 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     ARGS,
     db::{handles, models::Channel},
-    file::{init_storage, local::LocalStorage},
+    file::{Storage, init_storage},
     player::{output::player, utils::Media},
     utils::{config::PlayoutConfig, errors::ServiceError, logging::Target, system::SystemStat},
 };
@@ -87,7 +86,7 @@ pub struct ChannelManager {
     pub filler_list: Arc<Mutex<Vec<Media>>>,
     pub current_index: Arc<AtomicUsize>,
     pub filler_index: Arc<AtomicUsize>,
-    pub storage: LocalStorage,
+    pub storage: Arc<dyn Storage>,
     pub supervisor_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
     pub validation_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
     pub metrics_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
@@ -184,12 +183,10 @@ impl ChannelManager {
         channel.time_shift.clone_from(&other.time_shift);
         channel.timezone.clone_from(&other.timezone);
 
-        let channel_storage = channel.storage.clone();
         let channel_extensions = channel.extra_extensions.clone();
 
         drop(channel);
 
-        let s_path = Path::new(&channel_storage);
         let mut extensions = self.config.read().await.storage.extensions.clone();
         let mut extra_extensions = channel_extensions
             .split(',')
@@ -197,8 +194,7 @@ impl ChannelManager {
             .collect::<Vec<String>>();
 
         extensions.append(&mut extra_extensions);
-        *self.storage.root.write().await = s_path.to_path_buf();
-        *self.storage.extensions.write().await = extensions;
+        self.storage.set_extensions(extensions).await;
     }
 
     pub async fn update_config(&self, new_config: PlayoutConfig) {
@@ -434,6 +430,7 @@ impl ChannelManager {
                 playlist,
                 is_alive,
                 token.clone(),
+                Some(manager.storage.clone()),
             )
             .await;
 

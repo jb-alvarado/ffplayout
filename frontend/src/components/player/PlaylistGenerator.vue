@@ -79,9 +79,8 @@ function addFolderToTemplate(event: any) {
     const n = event.newIndex
 
     const media = event.item
-    const storagePath = configStore.channels[configStore.i]?.storage
     const navPath = mediaStore.folderCrumbs[mediaStore.folderCrumbs.length - 1]?.path
-    const sourcePath = `${storagePath}/${navPath}/${media.name}`.replace(/\/[/]+/g, '/')
+    const sourcePath = `${navPath}/${media.name}`.replace(/^\/+/, '')
     event.item.path = sourcePath
 
     nextTick(() => {

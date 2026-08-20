@@ -16,6 +16,7 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 use crate::{
+    file::{PlaybackSource, Storage},
     player::utils::{
         JsonPlaylist, Media, detect_audio_silence, is_close, is_remote, sec_to_time,
         time_in_seconds, time_to_sec,
@@ -158,6 +159,7 @@ pub async fn validate_playlist(
     mut playlist: JsonPlaylist,
     is_alive: Arc<AtomicBool>,
     cancel_token: CancellationToken,
+    storage: Option<Arc<dyn Storage>>,
 ) {
     let id = config.general.channel_id;
     let date = playlist.date;
@@ -181,11 +183,31 @@ pub async fn validate_playlist(
         }
 
         let pos = index + 1;
+        let original_source = item.source.clone();
 
         if begin < time_sec {
             // Do not validate clips that are being passed.
             begin += item.out - item.seek;
             continue;
+        }
+
+        if let Some(storage) = storage.as_ref()
+            && storage.capabilities().direct_playback_url
+            && !item.source.is_empty()
+            && !is_remote(&item.source)
+        {
+            match storage.resolve_playback(&item.source).await {
+                Ok(PlaybackSource::LocalPath(path)) => {
+                    item.source = path.to_string_lossy().to_string();
+                }
+                Ok(PlaybackSource::Url(url)) => item.source = url,
+                Err(error) => {
+                    error!(channel = id;
+                        "<span class=\"log-gray\">[Validation]</span> Could not resolve source on position <span class=\"log-number\">{pos:0>3}</span>: <span class=\"log-addr\">{}</span>: {error}",
+                        item.source
+                    );
+                }
+            }
         }
 
         if !is_remote(&item.source) {
@@ -226,7 +248,7 @@ pub async fn validate_playlist(
                     } else if let Ok(mut list) = current_list.try_lock() {
                         // Filter out same item in current playlist, then add the probe to it.
                         // Check also if duration differs with playlist value, log error if so and adjust that value.
-                        for o in list.iter_mut().filter(|o| o.source == item.source) {
+                        for o in list.iter_mut().filter(|o| o.source == original_source) {
                             o.probe.clone_from(&item.probe);
 
                             if let Some(probe_duration) =

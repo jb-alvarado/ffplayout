@@ -237,6 +237,13 @@ pub async fn create_file_access_token(
     }
     .ok_or_else(|| ServiceError::BadRequest(format!("Channel {id} not found!")))?;
 
+    if manager.storage.capabilities().direct_playback_url
+        && let crate::file::PlaybackSource::Url(url) =
+            manager.storage.resolve_playback(&request.filename).await?
+    {
+        return Ok(Json(FileAccessResponse::direct_url(url)));
+    }
+
     let config = manager.config.read().await;
     let storage = config.channel.storage.clone();
     let (path, _, _) = norm_abs_path(&storage, &request.filename)?;

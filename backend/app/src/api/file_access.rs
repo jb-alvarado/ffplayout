@@ -45,6 +45,8 @@ pub struct FileAccessState {
 pub struct FileAccessResponse {
     pub access: String,
     pub expires_in_seconds: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
 }
 
 impl From<&FileAccessData> for FileAccessResponse {
@@ -52,6 +54,17 @@ impl From<&FileAccessData> for FileAccessResponse {
         Self {
             access: data.uuid.to_string(),
             expires_in_seconds: FILE_ACCESS_TTL.as_secs(),
+            url: None,
+        }
+    }
+}
+
+impl FileAccessResponse {
+    pub fn direct_url(url: String) -> Self {
+        Self {
+            access: String::new(),
+            expires_in_seconds: 0,
+            url: Some(url),
         }
     }
 }

@@ -481,6 +481,10 @@ pub fn init_logging(
     let mut builder = LogSpecification::builder();
     builder
         .default(log_level)
+        // Wasmtime compiles plugin components with Cranelift. Its compilation
+        // timing is useful to Wasmtime developers, but must not turn a normal
+        // ffplayout development run into a stream of compiler internals.
+        .module("cranelift_codegen", LevelFilter::Error)
         .module("cosmic_text", LevelFilter::Error)
         .module("hyper", LevelFilter::Error)
         .module("flexi_logger", LevelFilter::Error)
@@ -501,6 +505,8 @@ pub fn init_logging(
         // operations) into the log facade under this target.
         .module("tracing::span", LevelFilter::Error)
         .module("wgpu", LevelFilter::Error)
+        .module("wasmtime", LevelFilter::Error)
+        .module("wasmtime_cranelift", LevelFilter::Error)
         .module("winit", LevelFilter::Error);
 
     let mut logger = Logger::with(builder.build()).write_mode(WriteMode::Async);

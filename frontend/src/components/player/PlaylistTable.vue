@@ -120,8 +120,7 @@ function dropItem(event: any) {
 
     if (event.event.from.id === 'mediaList') {
         const media = event.item
-        const storagePath = configStore.channels[configStore.i]?.storage
-        const sourcePath = `${storagePath}/${mediaStore.folderTree.source}/${media.name}`.replace(/\/[/]+/g, '/')
+        const sourcePath = `${mediaStore.folderTree.source}/${media.name}`.replace(/^\/+/, '')
         const uid = genUID()
 
         const mediaObject = {

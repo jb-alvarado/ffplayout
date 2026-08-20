@@ -235,6 +235,7 @@ async fn async_main() -> Result<(), ProcessError> {
                     playlist,
                     Arc::new(AtomicBool::new(true)),
                     CancellationToken::new(),
+                    None,
                 )
                 .await;
             } else if ARGS.test_mail {

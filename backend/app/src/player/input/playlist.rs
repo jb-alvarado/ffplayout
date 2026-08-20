@@ -573,6 +573,25 @@ impl CurrentProgram {
         let node_index = node.index.unwrap_or_default();
         let duration = node.out - node.seek;
 
+        // Local storage keeps the existing path-based behavior. A remote
+        // storage plugin resolves its storage key immediately before probing
+        // and playback, so short-lived URLs need not be persisted in a
+        // playlist.
+        if self.manager.storage.capabilities().direct_playback_url
+            && !node.source.is_empty()
+            && !is_remote(&node.source)
+        {
+            match self.manager.storage.resolve_playback(&node.source).await {
+                Ok(crate::file::PlaybackSource::LocalPath(path)) => {
+                    node.source = path.to_string_lossy().to_string();
+                }
+                Ok(crate::file::PlaybackSource::Url(url)) => node.source = url,
+                Err(error) => {
+                    error!(channel = self.channel_id; "Could not resolve storage source '{}': {error}", node.source);
+                }
+            }
+        }
+
         if node.duration > 0.0 && duration < 1.0 {
             warn!(
                 channel = self.channel_id;

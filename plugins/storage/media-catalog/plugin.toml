@@ -1,0 +1,8 @@
+[plugin]
+id = "media-catalog"
+kind = "storage"
+api_version = 1
+module = "target/wasm32-wasip2/release/media_catalog.wasm"
+
+[permissions.filesystem]
+read = ["../../../tests/assets/storage"]

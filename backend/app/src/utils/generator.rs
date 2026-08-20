@@ -4,7 +4,7 @@
 ///
 /// The generator takes the files from storage, which are set in config.
 /// It also respect the shuffle/sort mode.
-use std::io::Error;
+use std::{io::Error, path::Path};
 
 use async_walkdir::WalkDir;
 use chrono::Timelike;
@@ -312,6 +312,18 @@ pub async fn playlist_generator(
                 let mut fillers = filler_list(&config, manager, time_left).await;
 
                 playlist.program.append(&mut fillers);
+            }
+        }
+
+        // Plugins receive storage-relative keys. The generator itself may
+        // need local paths to enumerate and probe media, but those host paths
+        // must never become part of a plugin-backed playlist.
+        if manager.storage.capabilities().direct_playback_url {
+            for item in &mut playlist.program {
+                if let Ok(relative) = Path::new(&item.source).strip_prefix(&config.channel.storage)
+                {
+                    item.source = relative.to_string_lossy().replace('\\', "/");
+                }
             }
         }
 

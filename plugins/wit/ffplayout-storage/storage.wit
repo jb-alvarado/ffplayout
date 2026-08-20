@@ -1,0 +1,62 @@
+package ffplayout:storage@0.1.0;
+
+interface types {
+  /// An item displayed by a storage backend. `duration` is optional because
+  /// remote backends often cannot know it without probing the media first.
+  record entry {
+    name: string,
+    duration: option<f64>,
+  }
+
+  /// A directory listing. File names are relative to `source`, and `folders`
+  /// contains direct children only.
+  record browser-result {
+    source: string,
+    parent: option<string>,
+    parent-folders: list<string>,
+    folders: list<string>,
+    files: list<entry>,
+  }
+
+  flags capabilities {
+    browse,
+    write,
+    move-entry,
+    recursive-delete,
+    direct-playback-url,
+    supports-range-requests,
+    watch-changes,
+  }
+
+  variant playback-source {
+    local-path(string),
+    url(string),
+  }
+
+  variant storage-error {
+    not-found,
+    forbidden,
+    unsupported,
+    failed(string),
+  }
+}
+
+/// Host functions that are granted only when a plugin manifest declares a
+/// matching filesystem permission. They are deliberately separate from the
+/// storage API: S3 and other remote plugins do not need this import.
+interface filesystem-catalog {
+  use types.{browser-result};
+  browse: func(prefix: string, folders-only: bool, extensions: list<string>) -> result<browser-result, string>;
+}
+
+interface storage {
+  use types.{browser-result, capabilities as capability-flags, playback-source, storage-error};
+  capabilities: func() -> capability-flags;
+  browse: func(prefix: string, folders-only: bool, extensions: list<string>) -> result<browser-result, storage-error>;
+  playback: func(key: string) -> result<playback-source, storage-error>;
+}
+
+world storage-plugin {
+  import filesystem-catalog;
+  export storage;
+}
