@@ -89,6 +89,7 @@ const newSource = ref({
     duration: 0,
     ad: false,
     source: '',
+    audio: '',
     uid: '',
 } as PlaylistItem)
 
@@ -263,6 +264,7 @@ function processSource(process: boolean) {
         duration: 0,
         ad: false,
         source: '',
+        audio: '',
         uid: genUID(),
     }
 
@@ -282,6 +284,7 @@ function editPlaylistItem(i: number) {
         duration: playlistStore.playlist[i]?.duration ?? 0,
         ad: playlistStore.playlist[i]?.ad ?? false,
         source: playlistStore.playlist[i]?.source ?? '',
+        audio: playlistStore.playlist[i]?.audio ?? '',
         uid: playlistStore.playlist[i]?.uid ?? '',
     }
 }
@@ -561,6 +564,16 @@ async function deletePlaylist(del: boolean) {
                         name="source"
                         class="input input-sm w-full"
                         :disabled="newSource.source.includes(configStore.channels[configStore.i]?.storage ?? 'xyz123')"
+                    />
+                </fieldset>
+                <fieldset class="fieldset">
+                    <legend class="fieldset-legend">{{ t('player.audio') }}</legend>
+                    <input
+                        v-model="newSource.audio"
+                        type="text"
+                        name="audio"
+                        class="input input-sm w-full"
+                        :placeholder="t('player.audioSourcePlaceholder')"
                     />
                 </fieldset>
                 <fieldset class="fieldset mt-2 rounded-box w-full">

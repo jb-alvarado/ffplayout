@@ -38,7 +38,7 @@ pub use input::live::{LiveReceiver, spawn_rtmp_listener};
 pub use output::desktop::thread::run_on_main_thread as run_desktop_on_main_thread;
 pub use output::resolved_variant_playlist_path;
 use output::{FrameOutput, Output, PlaybackStopped};
-use playout::{PlaybackRestart, PlaybackSkipped, Timeline, play_clip, write_fallback};
+use playout::{PlaybackRestart, PlaybackSkipped, Timeline, write_fallback};
 pub use utils::{
     clock,
     config::{
@@ -150,6 +150,7 @@ impl HlsHealth {
 struct PlayOptions<'a> {
     seek_seconds: Option<f64>,
     duration_seconds: Option<f64>,
+    external_audio_path: Option<&'a str>,
     subtitles_media_path: Option<&'a str>,
     logo_fade: LogoFade,
 }
@@ -278,6 +279,7 @@ impl AsyncPlayout {
                 path,
                 seek_seconds,
                 duration_seconds: None,
+                external_audio_path: None,
                 subtitles_media_path: None,
                 logo_fade: LogoFade::default(),
                 playout_rate: 1.0,
@@ -316,6 +318,29 @@ impl AsyncPlayout {
         logo_fade: LogoFade,
         playout_rate: f64,
     ) -> Result<ClipResult> {
+        self.play_with_timing_logo_fade_rate_and_audio(
+            path,
+            seek_seconds,
+            duration_seconds,
+            None,
+            subtitles_media_path,
+            logo_fade,
+            playout_rate,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn play_with_timing_logo_fade_rate_and_audio(
+        &self,
+        path: impl Into<String>,
+        seek_seconds: Option<f64>,
+        duration_seconds: Option<f64>,
+        external_audio_path: Option<String>,
+        subtitles_media_path: Option<String>,
+        logo_fade: LogoFade,
+        playout_rate: f64,
+    ) -> Result<ClipResult> {
         let path = path.into();
         let (response, result) = oneshot::channel();
         self.commands
@@ -323,6 +348,7 @@ impl AsyncPlayout {
                 path,
                 seek_seconds,
                 duration_seconds,
+                external_audio_path,
                 subtitles_media_path,
                 logo_fade,
                 playout_rate,
@@ -382,6 +408,7 @@ enum AsyncCommand {
         path: String,
         seek_seconds: Option<f64>,
         duration_seconds: Option<f64>,
+        external_audio_path: Option<String>,
         subtitles_media_path: Option<String>,
         logo_fade: LogoFade,
         playout_rate: f64,
@@ -407,6 +434,7 @@ fn run_async_playout_worker(mut playout: Playout, commands: mpsc::Receiver<Async
                 path,
                 seek_seconds,
                 duration_seconds,
+                external_audio_path,
                 subtitles_media_path,
                 logo_fade,
                 playout_rate,
@@ -416,6 +444,7 @@ fn run_async_playout_worker(mut playout: Playout, commands: mpsc::Receiver<Async
                     &path,
                     seek_seconds,
                     duration_seconds,
+                    external_audio_path.as_deref(),
                     subtitles_media_path.as_deref(),
                     logo_fade,
                     playout_rate,
@@ -555,6 +584,7 @@ impl Playout {
             path,
             seek_seconds,
             None,
+            None,
             Some(path),
             LogoFade::default(),
             1.0,
@@ -571,6 +601,7 @@ impl Playout {
         self.play_timed_with_live(
             path,
             seek_seconds,
+            None,
             None,
             Some(path),
             LogoFade::default(),
@@ -590,6 +621,7 @@ impl Playout {
             path,
             seek_seconds,
             duration_seconds,
+            None,
             Some(path),
             logo_fade,
             1.0,
@@ -603,11 +635,13 @@ impl Playout {
         path: &str,
         seek_seconds: Option<f64>,
         duration_seconds: Option<f64>,
+        external_audio_path: Option<&str>,
         subtitles_media_path: Option<&str>,
         logo_fade: LogoFade,
         playout_rate: f64,
         live: &mut Option<LiveReceiver>,
     ) -> Result<ClipResult> {
+        let external_audio_path = external_audio_path.map(str::to_string);
         let subtitles_media_path = subtitles_media_path.map(str::to_string);
         self.output.set_playout_rate(playout_rate);
 
@@ -636,6 +670,7 @@ impl Playout {
                         PlayOptions {
                             seek_seconds,
                             duration_seconds,
+                            external_audio_path: external_audio_path.as_deref(),
                             subtitles_media_path: subtitles_media_path.as_deref(),
                             logo_fade,
                         },
@@ -651,6 +686,7 @@ impl Playout {
                         PlayOptions {
                             seek_seconds,
                             duration_seconds,
+                            external_audio_path: external_audio_path.as_deref(),
                             subtitles_media_path: subtitles_media_path.as_deref(),
                             logo_fade,
                         },
@@ -684,6 +720,7 @@ impl Playout {
                 PlayOptions {
                     seek_seconds,
                     duration_seconds,
+                    external_audio_path: external_audio_path.as_deref(),
                     subtitles_media_path: subtitles_media_path.as_deref(),
                     logo_fade,
                 },
@@ -699,6 +736,7 @@ impl Playout {
                 PlayOptions {
                     seek_seconds,
                     duration_seconds,
+                    external_audio_path: external_audio_path.as_deref(),
                     subtitles_media_path: subtitles_media_path.as_deref(),
                     logo_fade,
                 },
@@ -734,8 +772,9 @@ fn play_to_output<O: FrameOutput>(
     playback_control: &PlaybackControl,
     options: PlayOptions<'_>,
 ) -> Result<ClipResult> {
-    match play_clip(
+    match playout::play_clip_with_external_audio(
         path,
+        options.external_audio_path,
         config,
         timeline,
         output,

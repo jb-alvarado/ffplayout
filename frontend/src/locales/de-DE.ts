@@ -83,6 +83,7 @@ export default {
         copyTo: 'Kopiere aktuelles Programm nach',
         addEdit: 'Quelle hinzufügen/bearbeiten',
         audio: 'Audio',
+        audioSourcePlaceholder: 'Optionale separate Audiodatei oder URL',
         customFilter: 'Benutzerdefinierter Filter',
         deleteFrom: 'Programm löschen von',
         deleteSuccess: 'Wiedergabeliste gelöscht...',

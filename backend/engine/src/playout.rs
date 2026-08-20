@@ -93,6 +93,7 @@ impl Timeline {
 /// Input PTS are replaced with continuous timeline PTS. If only one media type
 /// exists, the missing counterpart is synthesized.
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub(crate) fn play_clip<O: FrameOutput>(
     path: &str,
     cfg: &OutputConfig,
@@ -104,7 +105,43 @@ pub(crate) fn play_clip<O: FrameOutput>(
     logo_fade: LogoFade,
     playback_control: &PlaybackControl,
 ) -> Result<()> {
+    play_clip_with_external_audio(
+        path,
+        None,
+        cfg,
+        timeline,
+        output,
+        seek_seconds,
+        duration_seconds,
+        subtitles_media_path,
+        logo_fade,
+        playback_control,
+    )
+}
+
+/// Plays a video source with an optional external audio source. The audio input
+/// is decoded on demand while video advances, so encoded outputs receive
+/// timestamp-interleaved audio/video packets.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn play_clip_with_external_audio<O: FrameOutput>(
+    path: &str,
+    external_audio_path: Option<&str>,
+    cfg: &OutputConfig,
+    timeline: &mut Timeline,
+    output: &mut O,
+    seek_seconds: Option<f64>,
+    duration_seconds: Option<f64>,
+    subtitles_media_path: Option<&str>,
+    logo_fade: LogoFade,
+    playback_control: &PlaybackControl,
+) -> Result<()> {
     let logo_fade_plan = LogoFadePlan::new(timeline.video_pts, duration_seconds, cfg, logo_fade);
+    let mut external_audio = external_audio_path
+        .map(|audio_path| {
+            ExternalAudioInput::open(audio_path, cfg, timeline, seek_seconds, duration_seconds)
+                .with_context(|| format!("failed to open external audio {audio_path} for {path}"))
+        })
+        .transpose()?;
 
     let result = if let Some(duration_seconds) = duration_seconds.filter(|duration| *duration > 0.0)
     {
@@ -118,6 +155,7 @@ pub(crate) fn play_clip<O: FrameOutput>(
             subtitles_media_path,
             logo_fade_plan,
             playback_control,
+            external_audio.as_mut(),
         )
     } else {
         let ictx = open_media_input(path)?;
@@ -134,6 +172,7 @@ pub(crate) fn play_clip<O: FrameOutput>(
                 logo_fade_plan,
                 playback_control,
             },
+            external_audio.as_mut(),
         )
     };
 
@@ -155,6 +194,7 @@ fn play_looped_clip<O: FrameOutput>(
     subtitles_media_path: Option<&str>,
     logo_fade_plan: LogoFadePlan,
     playback_control: &PlaybackControl,
+    mut external_audio: Option<&mut ExternalAudioInput>,
 ) -> Result<()> {
     if !duration_seconds.is_finite() {
         return Err(anyhow!("clip duration must be a finite number"));
@@ -183,6 +223,7 @@ fn play_looped_clip<O: FrameOutput>(
                 logo_fade_plan,
                 playback_control,
             },
+            external_audio.as_deref_mut(),
         )?;
 
         let elapsed = elapsed_timeline_seconds(cfg, timeline, before_video_pts, before_audio_pts);
@@ -301,6 +342,39 @@ impl MediaFadePlan {
             ((end_pts - pts).max(0) as f64 / self.audio_samples as f64).clamp(0.0, 1.0) as f32
         })
     }
+
+    fn for_external_audio_trim(
+        requested_duration_us: Option<i64>,
+        seek_us: i64,
+        source_duration_us: Option<i64>,
+        timeline: &Timeline,
+        cfg: &OutputConfig,
+    ) -> Self {
+        let (Some(requested_duration_us), Some(source_duration_us)) =
+            (requested_duration_us, source_duration_us)
+        else {
+            return Self::default();
+        };
+
+        let scheduled_out_us = seek_us.saturating_add(requested_duration_us);
+        if scheduled_out_us.saturating_add(MEDIA_DURATION_TOLERANCE_US) >= source_duration_us {
+            return Self::default();
+        }
+
+        Self {
+            audio_end_pts: Some(
+                timeline.audio_pts
+                    + div_ceil(
+                        i128::from(requested_duration_us) * i128::from(cfg.sample_rate),
+                        1_000_000,
+                    ) as i64,
+            ),
+            audio_samples: (MEDIA_FADE_SECONDS * f64::from(cfg.sample_rate))
+                .round()
+                .max(1.0) as i64,
+            ..Self::default()
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -376,25 +450,33 @@ pub(crate) fn play_opened_input<O: FrameOutput>(
     timeline: &mut Timeline,
     output: &mut O,
     options: InputPlaybackOptions<'_>,
+    mut external_audio: Option<&mut ExternalAudioInput>,
 ) -> Result<()> {
     let seek_seconds = options.seek_seconds;
     let seek_us = seek_seconds.map(seconds_to_microseconds).unwrap_or(0);
-    let (has_video, has_audio, has_invalid_time_base) = {
+    let (has_video, embedded_audio, video_has_invalid_time_base, audio_has_invalid_time_base) = {
         let streams = ictx.streams();
         let video_stream = streams.best(media::Type::Video);
         let audio_stream = streams.best(media::Type::Audio);
-        let has_invalid_time_base = video_stream
+        let video_has_invalid_time_base = video_stream
             .as_ref()
-            .is_some_and(|stream| !has_valid_time_base(stream.time_base()))
-            || audio_stream
-                .as_ref()
-                .is_some_and(|stream| !has_valid_time_base(stream.time_base()));
+            .is_some_and(|stream| !has_valid_time_base(stream.time_base()));
+        let audio_has_invalid_time_base = audio_stream
+            .as_ref()
+            .is_some_and(|stream| !has_valid_time_base(stream.time_base()));
         (
             video_stream.is_some(),
             audio_stream.is_some(),
-            has_invalid_time_base,
+            video_has_invalid_time_base,
+            audio_has_invalid_time_base,
         )
     };
+    let has_audio = embedded_audio || external_audio.is_some();
+    // An external track replaces the embedded one, so only its own decoder
+    // needs a valid audio time base. Do not reject a valid video because an
+    // unused embedded audio stream is malformed.
+    let has_invalid_time_base =
+        video_has_invalid_time_base || (external_audio.is_none() && audio_has_invalid_time_base);
     if !has_video && !has_audio {
         return Err(anyhow!("{label} contains no audio or video stream"));
     }
@@ -455,13 +537,19 @@ pub(crate) fn play_opened_input<O: FrameOutput>(
         )?),
         None => None,
     };
-    let mut audio = match audio_stream {
-        Some(ref stream) => Some(AudioDecoder::new(stream, cfg, label, trim_start_us)?),
-        None => None,
+    let mut audio = if external_audio.is_none() {
+        match audio_stream {
+            Some(ref stream) => Some(AudioDecoder::new(stream, cfg, label, trim_start_us)?),
+            None => None,
+        }
+    } else {
+        None
     };
 
     let video_index = video_stream.as_ref().map(format::stream::Stream::index);
-    let audio_index = audio_stream.as_ref().map(format::stream::Stream::index);
+    let audio_index = audio
+        .as_ref()
+        .and_then(|_| audio_stream.as_ref().map(format::stream::Stream::index));
     let mut video_finished = video.is_none();
     let video_finished_notified = video_finished;
     let mut decoded_video_frames = 0_i64;
@@ -505,6 +593,15 @@ pub(crate) fn play_opened_input<O: FrameOutput>(
                             output,
                             options.playback_control,
                         )?;
+                    } else if let Some(external_audio) = external_audio.as_deref_mut() {
+                        external_audio.decode_until(
+                            cfg,
+                            timeline,
+                            output,
+                            Some(audio_pts_for_video_position(cfg, timeline, audio_limit_pts)),
+                            &mut decoded_audio_samples,
+                            options.playback_control,
+                        )?;
                     }
                 }
             } else if Some(stream.index()) == audio_index
@@ -536,12 +633,14 @@ pub(crate) fn play_opened_input<O: FrameOutput>(
             timeline,
             output,
             &mut decoded_video_frames,
+            &mut decoded_audio_samples,
             &mut video_finished,
             video_limit_pts,
             logo_fade_plan,
             media_fade_plan,
             options.playback_control,
             !has_audio,
+            external_audio.as_deref_mut(),
         )?;
         if !has_audio {
             synchronize_silence_to_video(cfg, timeline, output, options.playback_control)?;
@@ -564,6 +663,20 @@ pub(crate) fn play_opened_input<O: FrameOutput>(
                 &mut decoded_audio_samples,
                 audio_limit_pts,
                 media_fade_plan,
+            )?;
+        } else if let Some(external_audio) = external_audio.as_deref_mut() {
+            let target_audio_pts = if has_video {
+                Some(audio_pts_for_video_position(cfg, timeline, audio_limit_pts))
+            } else {
+                audio_limit_pts
+            };
+            external_audio.decode_until(
+                cfg,
+                timeline,
+                output,
+                target_audio_pts,
+                &mut decoded_audio_samples,
+                options.playback_control,
             )?;
         }
 
@@ -617,12 +730,14 @@ fn finish_video<O: FrameOutput>(
     timeline: &mut Timeline,
     output: &mut O,
     decoded_frames: &mut i64,
+    decoded_audio_samples: &mut i64,
     finished: &mut bool,
     limit_pts: Option<i64>,
     logo_fade_plan: LogoFadePlan,
     media_fade_plan: MediaFadePlan,
     playback_control: &PlaybackControl,
     synthesize_silence: bool,
+    mut external_audio: Option<&mut ExternalAudioInput>,
 ) -> Result<()> {
     if *finished {
         return Ok(());
@@ -642,6 +757,15 @@ fn finish_video<O: FrameOutput>(
         )?;
         if synthesize_silence {
             synchronize_silence_to_video(cfg, timeline, output, playback_control)?;
+        } else if let Some(external_audio) = external_audio.as_deref_mut() {
+            external_audio.decode_until(
+                cfg,
+                timeline,
+                output,
+                Some(audio_pts_for_video_position(cfg, timeline, None)),
+                decoded_audio_samples,
+                playback_control,
+            )?;
         }
     }
     repeat_single_video_frame_to_limit(
@@ -650,11 +774,13 @@ fn finish_video<O: FrameOutput>(
         timeline,
         output,
         decoded_frames,
+        decoded_audio_samples,
         limit_pts,
         logo_fade_plan,
         media_fade_plan,
         playback_control,
         synthesize_silence,
+        external_audio,
     )?;
     output.video_decoded()?;
     *finished = true;
@@ -668,11 +794,13 @@ fn repeat_single_video_frame_to_limit<O: FrameOutput>(
     timeline: &mut Timeline,
     output: &mut O,
     decoded_frames: &mut i64,
+    decoded_audio_samples: &mut i64,
     limit_pts: Option<i64>,
     logo_fade_plan: LogoFadePlan,
     media_fade_plan: MediaFadePlan,
     playback_control: &PlaybackControl,
     synthesize_silence: bool,
+    mut external_audio: Option<&mut ExternalAudioInput>,
 ) -> Result<()> {
     let Some(limit_pts) = limit_pts else {
         return Ok(());
@@ -708,6 +836,15 @@ fn repeat_single_video_frame_to_limit<O: FrameOutput>(
         )?;
         if synthesize_silence {
             synchronize_silence_to_video(cfg, timeline, output, playback_control)?;
+        } else if let Some(external_audio) = external_audio.as_deref_mut() {
+            external_audio.decode_until(
+                cfg,
+                timeline,
+                output,
+                Some(audio_pts_for_video_position(cfg, timeline, None)),
+                decoded_audio_samples,
+                playback_control,
+            )?;
         }
     }
 
@@ -720,6 +857,21 @@ fn single_frame_repeat_frames(decoded_frames: i64, video_pts: i64, limit_pts: i6
     } else {
         0
     }
+}
+
+/// Returns the audio position that matches the current video frame. An
+/// external audio track must only be decoded this far while video advances;
+/// decoding it up to the clip end first lets desktop audio outrun the image.
+fn audio_pts_for_video_position(
+    cfg: &OutputConfig,
+    timeline: &Timeline,
+    limit_pts: Option<i64>,
+) -> i64 {
+    let position = div_ceil(
+        i128::from(timeline.video_pts) * i128::from(cfg.sample_rate),
+        i128::from(cfg.fps),
+    ) as i64;
+    limit_pts.map_or(position, |limit| position.min(limit))
 }
 
 fn stream_duration_us(stream: &format::stream::Stream) -> Option<i64> {
@@ -1369,6 +1521,132 @@ struct AudioDecoder {
     trim_start_us: Option<i64>,
 }
 
+/// A second input used as a clip's external audio track. It owns its demuxer
+/// so packets can be read incrementally in lockstep with the video timeline.
+pub(crate) struct ExternalAudioInput {
+    input: format::context::Input,
+    stream_index: usize,
+    fade_plan: MediaFadePlan,
+    decoder: AudioDecoder,
+    eof: bool,
+}
+
+impl ExternalAudioInput {
+    fn open(
+        path: &str,
+        cfg: &OutputConfig,
+        timeline: &Timeline,
+        seek_seconds: Option<f64>,
+        duration_seconds: Option<f64>,
+    ) -> Result<Self> {
+        let mut input = open_media_input(path)?;
+        let container_duration_us = (input.duration() > 0).then_some(input.duration());
+        if let Some(seek_seconds) = seek_seconds {
+            seek_input(&mut input, seek_seconds)
+                .with_context(|| format!("failed to seek external audio {path}"))?;
+        }
+        let stream = input
+            .streams()
+            .best(media::Type::Audio)
+            .ok_or_else(|| anyhow!("{path} contains no audio stream"))?;
+        let stream_index = stream.index();
+        let duration_us = stream_duration_us(&stream).or(container_duration_us);
+        let trim_start_us = seek_seconds
+            .map(seconds_to_microseconds)
+            .filter(|seek| *seek > 0);
+        let decoder = AudioDecoder::new(&stream, cfg, path, trim_start_us)?;
+        let fade_plan = MediaFadePlan::for_external_audio_trim(
+            duration_seconds.map(seconds_to_microseconds),
+            trim_start_us.unwrap_or_default(),
+            duration_us,
+            timeline,
+            cfg,
+        );
+
+        Ok(Self {
+            input,
+            stream_index,
+            fade_plan,
+            decoder,
+            eof: false,
+        })
+    }
+
+    fn decode_until<O: FrameOutput>(
+        &mut self,
+        cfg: &OutputConfig,
+        timeline: &mut Timeline,
+        output: &mut O,
+        target_audio_pts: Option<i64>,
+        decoded_samples: &mut i64,
+        playback_control: &PlaybackControl,
+    ) -> Result<()> {
+        while !self.eof && target_audio_pts.is_none_or(|target| timeline.audio_pts < target) {
+            check_playback_control(playback_control)?;
+            let packet = {
+                let mut packets = self.input.packets();
+                loop {
+                    match packets.next() {
+                        Some((stream, packet)) if stream.index() == self.stream_index => {
+                            break Some(packet);
+                        }
+                        Some(_) => {}
+                        None => break None,
+                    }
+                }
+            };
+
+            let Some(packet) = packet else {
+                self.eof = true;
+                benchmark::measure(Stage::AudioDecode, || self.decoder.decoder.send_eof())?;
+                receive_audio_frames(
+                    &mut self.decoder,
+                    timeline,
+                    output,
+                    decoded_samples,
+                    target_audio_pts,
+                    self.fade_plan,
+                    playback_control,
+                )?;
+                flush_audio_resampler(
+                    &mut self.decoder,
+                    timeline,
+                    output,
+                    decoded_samples,
+                    target_audio_pts,
+                    self.fade_plan,
+                )?;
+                break;
+            };
+
+            benchmark::measure(Stage::AudioDecode, || {
+                self.decoder.decoder.send_packet(&packet)
+            })?;
+            receive_audio_frames(
+                &mut self.decoder,
+                timeline,
+                output,
+                decoded_samples,
+                target_audio_pts,
+                self.fade_plan,
+                playback_control,
+            )?;
+        }
+
+        if self.eof
+            && let Some(target_audio_pts) = target_audio_pts
+        {
+            let silence_samples = target_audio_pts.saturating_sub(timeline.audio_pts);
+            if silence_samples > 0 {
+                write_silence(cfg, timeline, output, silence_samples)?;
+                *decoded_samples += silence_samples;
+            }
+        }
+
+        Ok(())
+    }
+}
+
 impl AudioDecoder {
     fn new(
         stream: &format::stream::Stream,
@@ -1832,9 +2110,9 @@ mod tests {
     use super::{
         AudioDecoder, FrameRateConverter, LogoFade, MediaFadePlan, PlaybackControl, Rational,
         Timeline, apply_audio_fade, fallback_video_time_base, fit_dimensions, has_valid_time_base,
-        padding_to_sync, parse_duration_us, play_clip, resample_audio_frame,
-        should_play_loop_iteration, single_frame_repeat_frames, synchronize_after_skip,
-        video_frame_needs_write, write_padding_video_frames,
+        padding_to_sync, parse_duration_us, play_clip, play_clip_with_external_audio,
+        resample_audio_frame, should_play_loop_iteration, single_frame_repeat_frames,
+        synchronize_after_skip, video_frame_needs_write, write_padding_video_frames,
     };
     use crate::{
         output::FrameOutput,
@@ -1864,6 +2142,7 @@ mod tests {
                 frame.height(),
                 frame.pts().unwrap_or_default(),
             ));
+            self.events.push("video");
             Ok(())
         }
 
@@ -2149,6 +2428,41 @@ mod tests {
     }
 
     #[test]
+    fn external_audio_fades_when_the_playlist_cuts_it_short() {
+        let cfg = OutputConfig::new(320, 240, 25, 1_000);
+        let timeline = Timeline::new();
+        let fade = MediaFadePlan::for_external_audio_trim(
+            Some(2_000_000),
+            0,
+            Some(3_000_000),
+            &timeline,
+            &cfg,
+        );
+
+        assert_eq!(fade.video_opacity_at(49), 1.0);
+        assert!(fade.audio_gain_at(1_500) < 0.6);
+        assert_eq!(fade.audio_gain_at(2_000), 0.0);
+    }
+
+    #[test]
+    fn external_audio_does_not_inherit_the_video_fade() {
+        let cfg = OutputConfig::new(320, 240, 25, 1_000);
+        let timeline = Timeline::new();
+        let video_fade =
+            MediaFadePlan::for_trimmed_clip(Some(2_000_000), 0, Some(3_000_000), &timeline, &cfg);
+        let external_audio_fade = MediaFadePlan::for_external_audio_trim(
+            Some(2_000_000),
+            0,
+            Some(2_000_000),
+            &timeline,
+            &cfg,
+        );
+
+        assert!(video_fade.video_opacity_at(49) < 0.1);
+        assert_eq!(external_audio_fade.audio_gain_at(1_999), 1.0);
+    }
+
+    #[test]
     fn media_fade_attenuates_audio_samples_at_clip_end() {
         use ffmpeg_next::{
             format::sample::{Sample, Type},
@@ -2241,6 +2555,128 @@ mod tests {
             "silence must be interleaved before the video stream finishes"
         );
         assert_eq!(output.events.last(), Some(&"video_finished"));
+    }
+
+    #[test]
+    fn plays_external_audio_with_video_only_source() {
+        let cfg = OutputConfig::new(320, 240, 25, 48_000);
+        let mut timeline = Timeline::new();
+        let mut output = RecordingOutput::default();
+
+        play_clip_with_external_audio(
+            &media_mix_asset("no_audio.mp4"),
+            Some(&media_mix_asset("audio.mp3")),
+            &cfg,
+            &mut timeline,
+            &mut output,
+            None,
+            Some(1.0),
+            None,
+            LogoFade::default(),
+            &PlaybackControl::default(),
+        )
+        .unwrap();
+
+        assert!((25..=26).contains(&timeline.video_pts));
+        assert!((48_000..=50_000).contains(&timeline.audio_pts));
+        assert!(output.audio_samples > 0);
+        assert_eq!(output.events.last(), Some(&"video_finished"));
+    }
+
+    #[test]
+    fn holds_an_image_while_playing_external_audio() {
+        let cfg = OutputConfig::new(320, 240, 25, 48_000);
+        let mut timeline = Timeline::new();
+        let mut output = RecordingOutput::default();
+
+        play_clip_with_external_audio(
+            &media_mix_asset("still.jpg"),
+            Some(&media_mix_asset("audio.mp3")),
+            &cfg,
+            &mut timeline,
+            &mut output,
+            None,
+            Some(1.0),
+            None,
+            LogoFade::default(),
+            &PlaybackControl::default(),
+        )
+        .unwrap();
+
+        assert!((25..=26).contains(&timeline.video_pts));
+        assert!((48_000..=50_000).contains(&timeline.audio_pts));
+        assert!((25..=26).contains(&output.video_frames.len()));
+        assert!(output.audio_samples > 0);
+        assert!(
+            output.events.iter().position(|event| *event == "video")
+                < output.events.iter().position(|event| *event == "audio"),
+            "the image frame must reach the output before the external audio advances"
+        );
+        assert_eq!(output.events.last(), Some(&"video_finished"));
+    }
+
+    #[test]
+    fn short_external_audio_is_followed_by_interleaved_silence() {
+        let cfg = OutputConfig::new(320, 240, 25, 48_000);
+        let mut timeline = Timeline::new();
+        let mut output = RecordingOutput::default();
+
+        play_clip_with_external_audio(
+            &media_mix_asset("no_audio.mp4"),
+            Some(&media_mix_asset("short_audio.mp4")),
+            &cfg,
+            &mut timeline,
+            &mut output,
+            None,
+            Some(12.0),
+            None,
+            LogoFade::default(),
+            &PlaybackControl::default(),
+        )
+        .unwrap();
+
+        let longest_video_run = output
+            .events
+            .split(|event| *event == "audio")
+            .map(|events| events.iter().filter(|event| **event == "video").count())
+            .max()
+            .unwrap_or_default();
+        assert!(
+            longest_video_run < 10,
+            "audio EOF must not leave a long run of video without audio packets"
+        );
+    }
+
+    #[test]
+    fn long_external_audio_does_not_prevent_video_looping() {
+        let cfg = OutputConfig::new(320, 240, 25, 48_000);
+        let mut timeline = Timeline::new();
+        let mut output = RecordingOutput::default();
+
+        play_clip_with_external_audio(
+            &media_mix_asset("short_video.mp4"),
+            Some(&media_mix_asset("audio.mp3")),
+            &cfg,
+            &mut timeline,
+            &mut output,
+            None,
+            Some(16.0),
+            None,
+            LogoFade::default(),
+            &PlaybackControl::default(),
+        )
+        .unwrap();
+
+        assert!(
+            output
+                .events
+                .iter()
+                .filter(|event| **event == "video_finished")
+                .count()
+                >= 2,
+            "the video source must be reopened instead of holding its final frame"
+        );
+        assert!((400..=402).contains(&timeline.video_pts));
     }
 
     #[test]

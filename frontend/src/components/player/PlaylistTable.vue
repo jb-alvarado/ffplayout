@@ -288,8 +288,13 @@ function deletePlaylistItem(index: number) {
                         <div v-if="!configStore.playout.playlist.infinit" class="px-3 text-left">
                             {{ secondsToTime(item.begin) }}
                         </div>
-                        <div class="text-left truncate" :class="{ 'handle cursor-grab': width > 768 }">
-                            {{ item.title || filename(item.source) }}
+                        <div class="flex items-center gap-1 text-left truncate" :class="{ 'handle cursor-grab': width > 768 }">
+                            <span class="truncate">{{ item.title || filename(item.source) }}</span>
+                            <i
+                                v-if="item.audio"
+                                class="bi-music-note-beamed shrink-0"
+                                :title="`${t('player.audio')}: ${filename(item.audio)}`"
+                            />
                         </div>
                         <div class="text-center hover:text-base-content/70">
                             <button class="cursor-pointer" @click="preview(item.source)">

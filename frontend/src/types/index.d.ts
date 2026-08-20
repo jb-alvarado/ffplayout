@@ -175,6 +175,7 @@ declare global {
         begin: number
         title?: string | null
         source: string
+        audio?: string
         duration: number
         in: number
         out: number

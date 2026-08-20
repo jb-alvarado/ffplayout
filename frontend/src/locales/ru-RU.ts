@@ -83,6 +83,7 @@ export default {
         copyTo: 'Скопировать текущую программу за',
         addEdit: 'Добавить/Редактировать файл',
         audio: 'Звук',
+        audioSourcePlaceholder: 'Необязательный отдельный аудиофайл или URL',
         customFilter: 'Пользовательский фильтр',
         deleteFrom: 'Удалить плейлист за',
         deleteSuccess: 'Плейлист удален...',
