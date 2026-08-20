@@ -1177,7 +1177,7 @@ fn volume_bitmap(fill: u32) -> RgbaBitmap {
     let width = 240_u32;
     let height = 28_u32;
     let mut pixels = vec![0; width as usize * height as usize * 4];
-    for pixel in pixels.chunks_exact_mut(4) {
+    for pixel in pixels.as_chunks_mut::<4>().0 {
         pixel.copy_from_slice(&[16, 18, 20, 220]);
     }
     for y in 11..17 {
