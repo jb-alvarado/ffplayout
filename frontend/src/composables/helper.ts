@@ -59,7 +59,11 @@ export const stringFormatter = () => {
         return parseInt(t[0] ?? '0') * 3600 + parseInt(t[1] ?? '0') * 60 + parseInt(t[2] ?? '0')
     }
 
-    function secToHMS(sec: number): string {
+    function secToHMS(sec: number | null | undefined): string {
+        if (typeof sec !== 'number' || !Number.isFinite(sec)) {
+            return '—'
+        }
+
         const sign = Math.sign(sec)
         sec = Math.abs(sec)
 
@@ -115,7 +119,10 @@ export const stringFormatter = () => {
         }
     }
 
-    function toMin(sec: number): string {
+    function toMin(sec: number | null | undefined): string {
+        if (typeof sec !== 'number' || !Number.isFinite(sec)) {
+            return '—'
+        }
         if (sec) {
             const minutes = Math.floor(sec / 60)
             const seconds = Math.round(sec - minutes * 60)

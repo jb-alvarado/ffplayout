@@ -274,39 +274,39 @@ function deletePlaylistItem(index: number) {
                         </div>
                     </div>
                 </template>
-                <template #item="{ record, index }">
+                <template #item="{ item, index }">
                     <li
-                        :id="record.uid"
-                        :key="record.uid"
+                        :id="item.uid"
+                        :key="item.uid"
                         class="grid grid-cols-[85px_auto_85px_85px] 2md:grid-cols-[85px_auto_85px_85px_85px_85px_85px_85px_85px] odd:bg-base-200 border-b border-base-content/20 duration-500 transition-colors py-2"
                         :class="{
                             'bg-lime-500/30!':
                                 playlistStore.playoutIsRunning && listDate === todayDate && index === currentIndex,
-                            'bg-amber-600/40!': record.overtime,
-                            'text-base-content/60': record.ad,
+                            'bg-amber-600/40!': item.overtime,
+                            'text-base-content/60': item.ad,
                         }"
                     >
                         <div v-if="!configStore.playout.playlist.infinit" class="px-3 text-left">
-                            {{ secondsToTime(record.begin) }}
+                            {{ secondsToTime(item.begin) }}
                         </div>
                         <div class="text-left truncate" :class="{ 'handle cursor-grab': width > 768 }">
-                            {{ record.title || filename(record.source) }}
+                            {{ item.title || filename(item.source) }}
                         </div>
                         <div class="text-center hover:text-base-content/70">
-                            <button class="cursor-pointer" @click="preview(record.source)">
+                            <button class="cursor-pointer" @click="preview(item.source)">
                                 <i class="bi-play-fill" />
                             </button>
                         </div>
-                        <div class="text-center hidden 2md:block">{{ secToHMS(record.duration) }}</div>
+                        <div class="text-center hidden 2md:block">{{ secToHMS(item.duration) }}</div>
                         <div class="text-center hidden 2md:block">
-                            {{ secToHMS(record.in) }}
+                            {{ secToHMS(item.in) }}
                         </div>
                         <div class="text-center hidden 2md:block">
-                            {{ secToHMS(record.out) }}
+                            {{ secToHMS(item.out) }}
                         </div>
                         <div class="text-center hidden 2md:block leading-3">
                             <input
-                                v-model="record.ad"
+                                v-model="item.ad"
                                 class="checkbox checkbox-xs rounded"
                                 type="checkbox"
                             />

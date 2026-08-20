@@ -304,10 +304,10 @@ async function generatePlaylist() {
                                     wrap-tag="ul"
                                     :sortable="false"
                                 >
-                                    <template #item="{ record }">
+                                    <template #item="{ item }">
                                         <li
-                                            :id="`folder-${record.uid}`"
-                                            :key="record.uid"
+                                            :id="`folder-${item.uid}`"
+                                            :key="item.uid"
                                             class="even:bg-base-200 cursor-grabbing px-2 w-full"
                                         >
                                             <button
@@ -316,7 +316,7 @@ async function generatePlaylist() {
                                                     ;[
                                                         (selectedFolders = []),
                                                         mediaStore.getTree(
-                                                            `/${mediaStore.folderList.source}/${record.name}`.replace(
+                                                            `/${mediaStore.folderList.source}/${item.name}`.replace(
                                                                 /\/[/]+/g,
                                                                 '/',
                                                             ),
@@ -326,7 +326,7 @@ async function generatePlaylist() {
                                                 "
                                             >
                                                 <i class="bi-folder-fill" />
-                                                {{ record.name }}
+                                                {{ item.name }}
                                             </button>
                                         </li>
                                     </template>
@@ -381,14 +381,14 @@ async function generatePlaylist() {
                                             wrap-tag="ul"
                                             @drop="addFolderToTemplate"
                                         >
-                                            <template #item="{ record }">
+                                            <template #item="{ item }">
                                                 <li
-                                                    :id="`path-${record.uid}`"
-                                                    :key="record.uid"
+                                                    :id="`path-${item.uid}`"
+                                                    :key="item.uid"
                                                     class="py-0 even:bg-base-200 px-2"
                                                 >
                                                     <i class="bi-folder-fill" />
-                                                    {{ record?.name }}
+                                                    {{ item.name }}
                                                 </li>
                                             </template>
                                         </VirtualList>

@@ -647,6 +647,20 @@ impl CurrentProgram {
                 node.duration = filler_media.duration;
                 node.probe = filler_media.probe;
                 node.is_placeholder = true;
+            } else if self.config.storage.filler_path.is_dir() {
+                // A directory is the normal configured filler location. If it
+                // currently contains no usable media, generate the built-in
+                // black/silence fallback instead of attempting to probe the
+                // directory as if it were a media file.
+                let mut dummy_duration = 60.0;
+
+                if node.duration > 0.0 && dummy_duration > duration {
+                    dummy_duration = duration;
+                }
+
+                node.seek = 0.0;
+                node.out = dummy_duration;
+                node.duration = dummy_duration;
             } else {
                 match probe_media(&self.config.storage.filler_path).await {
                     Ok(probe) => {
@@ -695,11 +709,19 @@ impl CurrentProgram {
                 }
             }
 
-            warn!(
-                channel = self.channel_id;
-                "Generate filler with <span class=\"log-number\">{:.2}</span> seconds length!",
-                node.out
-            );
+            if node.source.is_empty() {
+                info!(
+                    channel = self.channel_id;
+                    "Generate dummy with <span class=\"log-number\">{:.2}</span> seconds length.",
+                    node.out
+                );
+            } else {
+                warn!(
+                    channel = self.channel_id;
+                    "Generate filler with <span class=\"log-number\">{:.2}</span> seconds length!",
+                    node.out
+                );
+            }
         }
 
         trace!(

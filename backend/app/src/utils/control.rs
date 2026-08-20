@@ -127,16 +127,12 @@ pub async fn control_state(
     match command {
         PlayerCtl::Back => {
             if index > 1 && current_list.len() > 1 {
-                let mut media = current_list[index - 2].clone();
+                let media = current_list[index - 2].clone();
                 (shift, _) = get_delta(&config, &media.begin.unwrap_or(0.0));
 
                 info!(channel = id; "Move to last clip");
 
                 manager.current_index.fetch_sub(2, Ordering::SeqCst);
-
-                if let Err(e) = media.add_probe(false).await {
-                    error!(channel = id; "{e:?}");
-                };
 
                 data_map.insert("operation".to_string(), json!("move_to_last"));
                 data_map.insert("shifted_seconds".to_string(), json!(shift));
@@ -146,14 +142,10 @@ pub async fn control_state(
 
         PlayerCtl::Next => {
             if index < current_list.len() {
-                let mut media = current_list[index].clone();
+                let media = current_list[index].clone();
                 (shift, _) = get_delta(&config, &media.begin.unwrap_or(0.0));
 
                 info!(channel = id; "Move to next clip");
-
-                if let Err(e) = media.add_probe(false).await {
-                    error!(channel = id; "{e:?}");
-                };
 
                 data_map.insert("operation".to_string(), json!("move_to_next"));
                 data_map.insert("shifted_seconds".to_string(), json!(shift));

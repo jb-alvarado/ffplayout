@@ -69,6 +69,7 @@ watch([i], () => {
 
         <div class="w-full h-[calc(100%-40px)]">
             <VirtualList
+                v-if="mediaStore.folderTree.files.length > 0 || mediaStore.folderTree.folders.length > 0"
                 id="mediaList"
                 v-model="mediaStore.folderTree.files"
                 class="w-full h-full"
@@ -100,17 +101,17 @@ watch([i], () => {
                         </li>
                     </ul>
                 </template>
-                <template #item="{ record, index }">
+                <template #item="{ item, index }">
                     <li
                         :id="`file-${index}`"
-                        :key="record.name"
+                        :key="item.name"
                         class="grid grid-cols-[30px_auto_32px_62px] border-b border-base-content/20 py-1.5 items-center"
                         :class="mediaStore.folderTree.folders.length % 2 === 0 ? 'even:bg-base-200' : 'odd:bg-base-200'"
                     >
                         <div class="px-2" :class="{ timeHidden: configStore.playout.playlist.infinit }">
-                            <i v-if="mediaType(record.name) === 'audio'" class="bi-music-note-beamed" />
-                            <i v-else-if="mediaType(record.name) === 'video'" class="bi-film" />
-                            <i v-else-if="mediaType(record.name) === 'image'" class="bi-file-earmark-image" />
+                            <i v-if="mediaType(item.name) === 'audio'" class="bi-music-note-beamed" />
+                            <i v-else-if="mediaType(item.name) === 'video'" class="bi-film" />
+                            <i v-else-if="mediaType(item.name) === 'image'" class="bi-file-earmark-image" />
                             <i v-else class="bi-file-binary" />
                         </div>
                         <div
@@ -119,18 +120,18 @@ watch([i], () => {
                                 'handle cursor-grab': width > 739 && configStore.playout.processing.mode === 'playlist',
                             }"
                         >
-                            {{ record.name }}
+                            {{ item.name }}
                         </div>
                         <div class="text-center leading-3">
-                            <button class="cursor-pointer" @click="preview(record.name)">
+                            <button class="cursor-pointer" @click="preview(item.name)">
                                 <i class="bi-play-fill" />
                             </button>
                         </div>
                         <div class="text-nowrap">
-                            {{ secToHMS(record.duration) }}
+                            {{ secToHMS(item.duration) }}
                         </div>
                         <div class="hidden">00:00:00</div>
-                        <div class="hidden">{{ secToHMS(record.duration) }}</div>
+                        <div class="hidden">{{ secToHMS(item.duration) }}</div>
                         <div class="hidden">&nbsp;</div>
                         <div class="hidden">&nbsp;</div>
                         <div class="hidden">&nbsp;</div>

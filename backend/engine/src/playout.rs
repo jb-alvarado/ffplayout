@@ -498,6 +498,14 @@ pub(crate) fn play_opened_input<O: FrameOutput>(
                         media_fade_plan,
                         options.playback_control,
                     )?;
+                    if !has_audio {
+                        synchronize_silence_to_video(
+                            cfg,
+                            timeline,
+                            output,
+                            options.playback_control,
+                        )?;
+                    }
                 }
             } else if Some(stream.index()) == audio_index
                 && let Some(audio) = audio.as_mut()
@@ -523,6 +531,7 @@ pub(crate) fn play_opened_input<O: FrameOutput>(
         }
 
         finish_video(
+            cfg,
             &mut video,
             timeline,
             output,
@@ -532,7 +541,11 @@ pub(crate) fn play_opened_input<O: FrameOutput>(
             logo_fade_plan,
             media_fade_plan,
             options.playback_control,
+            !has_audio,
         )?;
+        if !has_audio {
+            synchronize_silence_to_video(cfg, timeline, output, options.playback_control)?;
+        }
         if let Some(audio) = audio.as_mut() {
             benchmark::measure(Stage::AudioDecode, || audio.decoder.send_eof())?;
             receive_audio_frames(
@@ -599,6 +612,7 @@ fn seconds_to_microseconds(seconds: f64) -> i64 {
 
 #[allow(clippy::too_many_arguments)]
 fn finish_video<O: FrameOutput>(
+    cfg: &OutputConfig,
     video: &mut Option<VideoDecoder>,
     timeline: &mut Timeline,
     output: &mut O,
@@ -608,6 +622,7 @@ fn finish_video<O: FrameOutput>(
     logo_fade_plan: LogoFadePlan,
     media_fade_plan: MediaFadePlan,
     playback_control: &PlaybackControl,
+    synthesize_silence: bool,
 ) -> Result<()> {
     if *finished {
         return Ok(());
@@ -625,8 +640,12 @@ fn finish_video<O: FrameOutput>(
             media_fade_plan,
             playback_control,
         )?;
+        if synthesize_silence {
+            synchronize_silence_to_video(cfg, timeline, output, playback_control)?;
+        }
     }
     repeat_single_video_frame_to_limit(
+        cfg,
         video,
         timeline,
         output,
@@ -635,6 +654,7 @@ fn finish_video<O: FrameOutput>(
         logo_fade_plan,
         media_fade_plan,
         playback_control,
+        synthesize_silence,
     )?;
     output.video_decoded()?;
     *finished = true;
@@ -643,6 +663,7 @@ fn finish_video<O: FrameOutput>(
 
 #[allow(clippy::too_many_arguments)]
 fn repeat_single_video_frame_to_limit<O: FrameOutput>(
+    cfg: &OutputConfig,
     video: &mut Option<VideoDecoder>,
     timeline: &mut Timeline,
     output: &mut O,
@@ -651,6 +672,7 @@ fn repeat_single_video_frame_to_limit<O: FrameOutput>(
     logo_fade_plan: LogoFadePlan,
     media_fade_plan: MediaFadePlan,
     playback_control: &PlaybackControl,
+    synthesize_silence: bool,
 ) -> Result<()> {
     let Some(limit_pts) = limit_pts else {
         return Ok(());
@@ -684,6 +706,9 @@ fn repeat_single_video_frame_to_limit<O: FrameOutput>(
             output,
             decoded_frames,
         )?;
+        if synthesize_silence {
+            synchronize_silence_to_video(cfg, timeline, output, playback_control)?;
+        }
     }
 
     Ok(())
@@ -1467,6 +1492,27 @@ fn synchronize_timeline<O: FrameOutput>(
     write_silence(cfg, timeline, output, audio_samples)
 }
 
+/// Keep audio packets interleaved with video for video-only inputs. Deferring
+/// all silence until EOF puts its timestamps behind already-muxed video and
+/// can make a realtime muxer wait indefinitely for an interleavable packet.
+fn synchronize_silence_to_video<O: FrameOutput>(
+    cfg: &OutputConfig,
+    timeline: &mut Timeline,
+    output: &mut O,
+    playback_control: &PlaybackControl,
+) -> Result<()> {
+    check_playback_control(playback_control)?;
+    let target_audio_pts = div_ceil(
+        i128::from(timeline.video_pts) * i128::from(cfg.sample_rate),
+        i128::from(cfg.fps),
+    ) as i64;
+    let samples = target_audio_pts.saturating_sub(timeline.audio_pts);
+    if samples > 0 {
+        write_silence(cfg, timeline, output, samples)?;
+    }
+    check_playback_control(playback_control)
+}
+
 fn synchronize_after_skip<O: FrameOutput>(
     cfg: &OutputConfig,
     timeline: &mut Timeline,
@@ -2151,6 +2197,84 @@ mod tests {
         assert_eq!(timeline.video_pts, 250);
         assert_eq!(timeline.audio_pts, 480_000);
         assert_eq!(output.events.last(), Some(&"video_finished"));
+    }
+
+    #[test]
+    fn plays_video_without_audio_and_generates_silence() {
+        let cfg = OutputConfig::new(320, 240, 25, 48_000);
+        let mut timeline = Timeline::new();
+        let mut output = RecordingOutput::default();
+
+        play_clip(
+            &media_mix_asset("no_audio.mp4"),
+            &cfg,
+            &mut timeline,
+            &mut output,
+            None,
+            None,
+            None,
+            LogoFade::default(),
+            &PlaybackControl::default(),
+        )
+        .unwrap();
+
+        assert!(
+            timeline.video_pts > 0,
+            "video-only input must advance video"
+        );
+        assert!(
+            output.audio_samples > 0,
+            "video-only input must produce silent output audio"
+        );
+        let first_audio = output
+            .events
+            .iter()
+            .position(|event| *event == "audio")
+            .expect("video-only input must emit audio frames");
+        let video_finished = output
+            .events
+            .iter()
+            .position(|event| *event == "video_finished")
+            .expect("video-only input must finish video");
+        assert!(
+            first_audio < video_finished,
+            "silence must be interleaved before the video stream finishes"
+        );
+        assert_eq!(output.events.last(), Some(&"video_finished"));
+    }
+
+    #[test]
+    fn holds_an_image_with_interleaved_silence() {
+        let cfg = OutputConfig::new(320, 240, 25, 48_000);
+        let mut timeline = Timeline::new();
+        let mut output = RecordingOutput::default();
+
+        play_clip(
+            &media_mix_asset("still.jpg"),
+            &cfg,
+            &mut timeline,
+            &mut output,
+            None,
+            Some(1.0),
+            None,
+            LogoFade::default(),
+            &PlaybackControl::default(),
+        )
+        .unwrap();
+
+        assert_eq!(timeline.video_pts, 25);
+        assert_eq!(timeline.audio_pts, 48_000);
+        let first_audio = output
+            .events
+            .iter()
+            .position(|event| *event == "audio")
+            .expect("image input must emit silence");
+        let video_finished = output
+            .events
+            .iter()
+            .position(|event| *event == "video_finished")
+            .expect("image input must finish video");
+        assert!(first_audio < video_finished);
     }
 
     #[test]
