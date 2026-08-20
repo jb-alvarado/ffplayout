@@ -241,9 +241,11 @@ pub struct Media {
 
 impl Media {
     pub async fn new(index: usize, src: &str, do_probe: bool) -> Self {
-        let mut duration = is_image_source(src)
-            .then_some(DEFAULT_IMAGE_DURATION)
-            .unwrap_or_default();
+        let mut duration = if is_image_source(src) {
+            DEFAULT_IMAGE_DURATION
+        } else {
+            Default::default()
+        };
         let mut probe = None;
 
         if do_probe
