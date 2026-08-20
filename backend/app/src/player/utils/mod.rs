@@ -311,18 +311,22 @@ impl Media {
                 }
                 Err(e) => errors.push(e.to_string()),
             };
+        }
 
-            if check_audio && Path::new(&self.audio).is_file() {
-                match probe_media(&self.audio).await {
-                    Ok(probe) => {
-                        self.probe_audio = Some(probe.clone());
+        if check_audio
+            && !self.audio.is_empty()
+            && self.probe_audio.is_none()
+            && (is_remote(&self.audio) || Path::new(&self.audio).is_file())
+        {
+            match probe_media(&self.audio).await {
+                Ok(probe) => {
+                    self.probe_audio = Some(probe.clone());
 
-                        if !probe.audio.is_empty() {
-                            self.duration_audio = probe.audio[0].duration.unwrap_or_default();
-                        }
+                    if !probe.audio.is_empty() {
+                        self.duration_audio = probe.audio[0].duration.unwrap_or_default();
                     }
-                    Err(e) => errors.push(e.to_string()),
                 }
+                Err(e) => errors.push(e.to_string()),
             }
         }
 
@@ -715,9 +719,11 @@ pub fn custom_format<T: fmt::Display>(template: &str, args: &[T]) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use serde_json::json;
 
-    use super::{DEFAULT_IMAGE_DURATION, Media, custom_format};
+    use super::{DEFAULT_IMAGE_DURATION, Media, custom_format, probe_media};
 
     #[tokio::test]
     async fn images_receive_a_default_playout_duration() {
@@ -725,6 +731,20 @@ mod tests {
 
         assert_eq!(media.duration, DEFAULT_IMAGE_DURATION);
         assert_eq!(media.out, DEFAULT_IMAGE_DURATION);
+    }
+
+    #[tokio::test]
+    async fn add_probe_checks_external_audio_when_main_probe_is_cached() {
+        let audio_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/assets/storage/media_mix/audio.mp3");
+        let mut media = Media::new(0, "cached-main.mp4", false).await;
+        media.probe = Some(probe_media(&audio_path).await.unwrap());
+        media.audio = audio_path.to_string_lossy().into_owned();
+
+        media.add_probe(true).await.unwrap();
+
+        assert!(media.probe_audio.is_some());
+        assert!(media.duration_audio > 0.0);
     }
 
     #[test]

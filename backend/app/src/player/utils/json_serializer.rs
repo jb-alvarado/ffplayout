@@ -82,10 +82,11 @@ pub fn set_defaults(config: &PlayoutConfig, playlist: &mut JsonPlaylist) {
         item.next_ad = false;
         item.skip = false;
 
-        let source_path = Path::new(&item.source);
-        if source_path.is_relative() {
-            let new_path = config.storage.path.join(source_path);
-            item.source = new_path.to_string_lossy().to_string();
+        for path in [&mut item.source, &mut item.audio] {
+            if Path::new(path).is_relative() && !path.is_empty() && !is_remote(path) {
+                let new_path = config.storage.path.join(&*path);
+                *path = new_path.to_string_lossy().to_string();
+            }
         }
 
         let dur = item.out - item.seek;

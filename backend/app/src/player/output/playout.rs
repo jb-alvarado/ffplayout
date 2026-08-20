@@ -186,8 +186,6 @@ async fn play_loop(
             continue;
         }
 
-        validate_supported_node(&node.audio)?;
-
         // An empty source is intentional when playlist and configured filler
         // are both unavailable: ff-engine then generates black video/silence.
         // Keep that implementation detail out of the player input, but make
@@ -198,11 +196,20 @@ async fn play_loop(
             &node.source
         };
 
-        info!(channel = id;
-            "Play for <span class=\"log-number\">{}</span>: <span class=\"log-addr\">{}</span>",
-            sec_to_time(node.out - node.seek),
-            display_source
-        );
+        if node.audio.is_empty() {
+            info!(channel = id;
+                "Play for <span class=\"log-number\">{}</span>: <span class=\"log-addr\">{}</span>",
+                sec_to_time(node.out - node.seek),
+                display_source
+            );
+        } else {
+            info!(channel = id;
+                "Play for <span class=\"log-number\">{}</span>: <span class=\"log-addr\">{}</span> + audio: <span class=\"log-addr\">{}</span>",
+                sec_to_time(node.out - node.seek),
+                display_source,
+                node.audio
+            );
+        }
 
         if config.task.enable {
             if config.task.path.is_file() {
@@ -223,10 +230,11 @@ async fn play_loop(
         };
         let is_ad = node.ad;
         match playout
-            .play_with_timing_logo_fade_and_rate(
+            .play_with_timing_logo_fade_rate_and_audio(
                 node.source.clone(),
                 (node.seek > 0.0).then_some(node.seek),
                 duration,
+                (!node.audio.is_empty()).then(|| node.audio.clone()),
                 subtitle_media_path(config, &node.source),
                 LogoFade {
                     fade_in: !is_ad && node.last_ad,
@@ -612,16 +620,6 @@ fn validate_supported_config(config: &PlayoutConfig) -> Result<(), ServiceError>
             "audio volume must be between 0.0 and 1.5".to_string(),
         ));
     }
-    Ok(())
-}
-
-fn validate_supported_node(audio: &str) -> Result<(), ServiceError> {
-    if !audio.is_empty() {
-        return Err(ServiceError::Conflict(
-            "backend/engine integration does not support separate audio files yet".to_string(),
-        ));
-    }
-
     Ok(())
 }
 

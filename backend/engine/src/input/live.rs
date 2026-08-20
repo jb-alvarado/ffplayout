@@ -847,6 +847,7 @@ fn run_rtmp_listener(
                                 logo_fade_plan,
                                 playback_control: &playback_control,
                             },
+                            None,
                         )
                     });
                     let _ = done_tx.send(result.map_err(|error| format!("{error:#}")));
