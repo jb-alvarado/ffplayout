@@ -1528,7 +1528,7 @@ dependencies = [
 
 [[package]]
 name = "ff-engine"
-version = "2.1.1"
+version = "2.2.0"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -1578,7 +1578,7 @@ dependencies = [
 
 [[package]]
 name = "ffplayout"
-version = "2.1.1"
+version = "2.2.0"
 dependencies = [
  "argon2",
  "async-walkdir",
@@ -5174,7 +5174,7 @@ dependencies = [
 
 [[package]]
 name = "tests"
-version = "2.1.1"
+version = "2.2.0"
 dependencies = [
  "axum",
  "chrono",
