@@ -21,18 +21,6 @@ if [[ -f $env_file ]]; then
     set +a
 fi
 
-docker_exec_env() {
-    local args=()
-
-    for name in "${env_names[@]}"; do
-        if [[ -v $name ]]; then
-            args+=("-e" "$name=${!name}")
-        fi
-    done
-
-    docker exec -it "${args[@]}" build-ffplayout "$@"
-}
-
 docker_run_env() {
     local args=()
 
@@ -45,15 +33,78 @@ docker_run_env() {
     docker run --rm -it "${args[@]}" "$@"
 }
 
-cargo_features_args=()
+select_cargo_features() {
+    local selection
 
-if [[ -n ${CARGO_FEATURES:-} ]]; then
-    cargo_features_args=(--features "$CARGO_FEATURES")
-fi
+    if [[ ! -t 0 ]]; then
+        echo "Set CARGO_FEATURES for a non-interactive build." >&2
+        return 1
+    fi
+
+    echo "Select Cargo features:"
+    PS3="Selection [1-6]: "
+    select selection in \
+        "desktop,embed_frontend (default)" \
+        "embed_frontend" \
+        "desktop,embed_frontend,ffmpeg-filter" \
+        "desktop,embed_frontend,ffmpeg-device" \
+        "desktop,embed_frontend,ffmpeg-filter,ffmpeg-device" \
+        "Custom"; do
+        case $REPLY in
+            1)
+                CARGO_FEATURES="desktop,embed_frontend"
+                break
+                ;;
+            2)
+                CARGO_FEATURES="embed_frontend"
+                break
+                ;;
+            3)
+                CARGO_FEATURES="desktop,embed_frontend,ffmpeg-filter"
+                break
+                ;;
+            4)
+                CARGO_FEATURES="desktop,embed_frontend,ffmpeg-device"
+                break
+                ;;
+            5)
+                CARGO_FEATURES="desktop,embed_frontend,ffmpeg-filter,ffmpeg-device"
+                break
+                ;;
+            6)
+                read -r -p "Cargo features (comma-separated): " CARGO_FEATURES
+                if [[ -n $CARGO_FEATURES ]]; then
+                    break
+                fi
+                echo "Please provide at least one feature."
+                ;;
+            *)
+                echo "Please select a number from 1 to 6."
+                ;;
+        esac
+    done
+
+    if [[ -z ${CARGO_FEATURES:-} ]]; then
+        echo "Feature selection cancelled." >&2
+        return 1
+    fi
+}
 
 if [[ -z $target ]]; then
     echo "Pass a target, like: ./scrips/build.sh debian"
     exit 1
+fi
+
+case $target in
+    debian-shared | debian-static) ;;
+    *)
+        echo "Unknown target: $target"
+        exit 1
+        ;;
+esac
+
+if [[ ! -v CARGO_FEATURES ]]; then
+    select_cargo_features
 fi
 
 IFS="= "
@@ -66,21 +117,16 @@ done < Cargo.toml
 echo "Compile ffplayout \"$version\""
 echo ""
 
-if [[ $target == "debian" ]]; then
+if [[ $target == "debian-shared" ]]; then
     rm -f ffplayout_${version}-1_amd64.deb
     rm -f "ffplayout-v${version}_debian.tar.gz"
 
-    docker rm -f build-ffplayout >/dev/null 2>&1 || true
-    docker build -t rust-debian -f ./docker/debian.Dockerfile .
-    docker run -dit --name build-ffplayout -v "$(pwd)":/src:z rust-debian
-
-    docker_exec_env cargo build --release --package ffplayout "${cargo_features_args[@]}"
-    docker exec -it build-ffplayout cargo deb --no-build \
-        -p ffplayout --manifest-path=/src/backend/app/Cargo.toml \
-        -o /src/ffplayout_${version}-1_amd64.deb
-
-    docker stop build-ffplayout
-    docker rm build-ffplayout
+    docker build -t rust-debian -f ./docker/shared.Dockerfile .
+    shared_docker_args=(-v "$(pwd)":/src:z)
+    if [[ -v CARGO_FEATURES ]]; then
+        shared_docker_args+=(-e "CARGO_FEATURES=$CARGO_FEATURES")
+    fi
+    docker_run_env "${shared_docker_args[@]}" rust-debian
 
     tar --transform 's/\.\/target\/.*\///g' -czvf "ffplayout-v${version}_debian.tar.gz" --exclude='*.db' --exclude='*.db-shm' \
         --exclude='*.db-wal' assets docker docs LICENSE README.md ./target/release/ffplayout
@@ -91,7 +137,7 @@ elif [[ $target == "debian-static" ]]; then
     rm -f ./target/release/ffplayout
     mkdir -p ./target/debian-static
 
-    static_cargo_features=${CARGO_FEATURES:-desktop,embed_frontend}
+    static_cargo_features=$CARGO_FEATURES
     ffmpeg_component_args=()
     if [[ ",$static_cargo_features," == *,ffmpeg-device,* ]]; then
         ffmpeg_component_args+=(--build-arg FFMPEG_AVDEVICE=1)
@@ -101,16 +147,11 @@ elif [[ $target == "debian-static" ]]; then
     fi
 
     docker build \
-        --build-arg FFMPEG_DEBUG="${FFMPEG_DEBUG:-0}" \
         --build-arg FFMPEG_VERSION="${FFMPEG_VERSION:-release/9.0}" \
         --build-arg FFMPEG_VAAPI="${FFMPEG_VAAPI:-0}" \
         "${ffmpeg_component_args[@]}" \
-        -t localhost/ffplayout-ffmpeg-static:latest \
-        -f ./docker/ffmpeg.Dockerfile .
-
-    docker build \
         --build-arg CARGO_FEATURES="$static_cargo_features" \
-        --build-arg FFMPEG_VAAPI="${FFMPEG_VAAPI:-0}" \
+        --target static-builder \
         -t localhost/ffplayout-static-builder:latest \
         -f ./docker/static.Dockerfile .
 
@@ -119,5 +160,5 @@ elif [[ $target == "debian-static" ]]; then
         -v "$(pwd)/target/debian-static":/artifacts:z \
         localhost/ffplayout-static-builder:latest
 
-    cp "./target/debian-static/ffplayout_${version}-1_amd64.deb" .
+    mv "./target/debian-static/ffplayout_${version}-1_amd64.deb" .
 fi

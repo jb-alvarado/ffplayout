@@ -6,7 +6,7 @@ ffplayout provides ***.deb** and ***.rpm** packages, which makes it easier to in
 
 1. Download the latest ffplayout from the [release](https://github.com/ffplayout/ffplayout/releases/latest) page and place the package in the **/tmp** folder
 2. Install it with `apt install /tmp/ffplayout_<VERSION>_amd64.deb`
-3. Install FFmpeg 7.1+ runtime libraries and tools (`ffmpeg`, `ffprobe`, `libavcodec`, `libavformat`, `libavutil`, `libswscale`, and `libswresample`), or install FFmpeg to **/usr/local/**. For Windows you can use this shared [FFmpeg libraries](https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-win64-gpl-shared-8.1.zip).
+3. Install FFmpeg 7.1+ runtime libraries and tools (`ffmpeg`, `ffprobe`, `libavcodec`, `libavformat`, `libavutil`, `libswscale`, and `libswresample`), or install FFmpeg to **/usr/local/**. For Windows you can use this shared [FFmpeg libraries](https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n9.0-latest-win64-gpl-shared-9.0.zip).
 4. Start the service, open **http://[IP ADDRESS]:8787**, and complete the first-time setup in the browser. It creates the global settings and first global admin.
 5. Use a reverse proxy for SSL before exposing ffplayout to the Internet.
 
@@ -52,7 +52,7 @@ ffplayout macOS release. Review the
 The Windows release does not include FFmpeg DLLs. Install them separately:
 
 1. Download and extract the Windows desktop archive from the [ffplayout release page](https://github.com/ffplayout/ffplayout/releases/latest).
-2. Download the [BtbN FFmpeg 8.1 GPL shared build](https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-win64-gpl-shared-8.1.zip).
+2. Download the [BtbN FFmpeg 8.1 GPL shared build](https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n9.0-latest-win64-gpl-shared-9.0.zip).
 3. Extract the FFmpeg archive and copy all `*.dll` files from its `bin` directory into the ffplayout `bin` directory next to `ffplayout.exe`. Alternatively, add the extracted FFmpeg `bin` directory to the system `PATH`.
 4. Start `bin\ffplayout.exe`.
 

@@ -112,7 +112,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $ffmpegName = "ffmpeg-n8.1-latest-win64-gpl-shared-8.1"
+          $ffmpegName = "ffmpeg-n9.0-latest-win64-gpl-shared-9.0"
           $ffmpegArchive = Join-Path $env:RUNNER_TEMP "$ffmpegName.zip"
           $ffmpegDir = Join-Path $env:RUNNER_TEMP $ffmpegName
           $ffmpegUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/$ffmpegName.zip"

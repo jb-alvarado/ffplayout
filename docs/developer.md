@@ -27,12 +27,12 @@ brew install ffmpeg pkg-config
 ```
 
 On Windows, download and extract the
-[BtbN FFmpeg 8.1 GPL shared build](https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-win64-gpl-shared-8.1.zip).
+[BtbN FFmpeg 9.0 GPL shared build](https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n9.0-latest-win64-gpl-shared-9.0.zip).
 Point `ffmpeg-sys-next` to the extracted directory and make the DLLs available
 while compiling:
 
 ```powershell
-$env:FFMPEG_DIR = "C:\path\to\ffmpeg-n8.1-latest-win64-gpl-shared-8.1"
+$env:FFMPEG_DIR = "C:\path\to\ffmpeg-n9.0-latest-win64-gpl-shared-9.0"
 $env:PATH = "$env:FFMPEG_DIR\bin;$env:PATH"
 cargo build
 ```
