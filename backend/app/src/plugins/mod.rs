@@ -132,7 +132,7 @@ fn plugin_roots() -> Vec<PathBuf> {
     ));
     #[cfg(target_os = "windows")]
     if let Some(base) = env::var_os("PROGRAMDATA") {
-        roots.push(Path::new(&base).join("ffplayout/plugins"));
+        roots.push(PathBuf::from(base).join("ffplayout/plugins"));
     }
     let mut seen = HashSet::new();
     roots.retain(|root| {
