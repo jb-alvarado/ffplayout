@@ -61,13 +61,26 @@ jobs:
           brew update
           brew install ffmpeg pkg-config
 
-      - name: Install FFmpeg libraries on Windows
+      - name: Download FFmpeg on Windows
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          vcpkg install ffmpeg:x64-windows
-          echo "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" >> $env:GITHUB_ENV
-          echo "VCPKGRS_DYNAMIC=1" >> $env:GITHUB_ENV
+          $ffmpegName = "ffmpeg-n9.0-latest-win64-gpl-shared-9.0"
+          $ffmpegArchive = Join-Path $env:RUNNER_TEMP "$ffmpegName.zip"
+          $ffmpegDir = Join-Path $env:RUNNER_TEMP $ffmpegName
+          $ffmpegUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/$ffmpegName.zip"
+
+          Invoke-WebRequest -Uri $ffmpegUrl -OutFile $ffmpegArchive
+          Expand-Archive -Path $ffmpegArchive -DestinationPath $env:RUNNER_TEMP
+
+          if (!(Test-Path "$ffmpegDir\include") -or
+              !(Test-Path "$ffmpegDir\lib") -or
+              !(Test-Path "$ffmpegDir\bin")) {
+            throw "Downloaded FFmpeg archive has an unexpected structure"
+          }
+
+          echo "FFMPEG_DIR=$ffmpegDir" >> $env:GITHUB_ENV
+          echo "$ffmpegDir\bin" >> $env:GITHUB_PATH
 
       - name: Frontend checks
         if: runner.os == 'Linux'
