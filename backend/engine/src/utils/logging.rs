@@ -33,6 +33,7 @@ const SKIPPED_FFMPEG_LOG_MESSAGES: &[&str] = &[
     r"Error parsing Opus packet header.",
 ];
 const LOG_DEDUP_FLUSH_THRESHOLD: usize = 100;
+const LOG_DEDUP_WINDOW: u64 = 6;
 
 thread_local! {
     static UNEXPECTED_RTMP_STREAM: RefCell<Option<(String, String)>> = const { RefCell::new(None) };
@@ -250,60 +251,139 @@ struct DedupLine {
 
 #[derive(Debug)]
 struct LogDedup {
-    last: Option<DedupLine>,
+    entries: Vec<DedupEntry>,
+    sequence: u64,
+}
+
+#[derive(Debug)]
+struct DedupEntry {
+    key: DedupKey,
+    summary_message: String,
+    last_seen: u64,
     repeat_count: usize,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct DedupKey {
+    level: c_int,
+    channel_id: i32,
+    fingerprint: String,
 }
 
 impl LogDedup {
     const fn new() -> Self {
         Self {
-            last: None,
-            repeat_count: 0,
+            entries: Vec::new(),
+            sequence: 0,
         }
     }
 
     fn push(&mut self, level: c_int, message: &str) -> Vec<DedupLine> {
+        self.sequence = self.sequence.wrapping_add(1);
+        let channel_id = log_channel_id();
+        let (fingerprint, summary_message) = ffmpeg_log_fingerprint(message);
+        let key = DedupKey {
+            level,
+            channel_id,
+            fingerprint,
+        };
         let line = DedupLine {
             level,
-            channel_id: log_channel_id(),
+            channel_id,
             message: message.to_string(),
         };
+        let mut lines = self.drain_expired();
 
-        if self.last.as_ref() == Some(&line) {
-            self.repeat_count += 1;
-            if self.repeat_count >= LOG_DEDUP_FLUSH_THRESHOLD {
-                let repeated = self.repeated_line();
-                self.repeat_count = 0;
-                return repeated.into_iter().collect();
+        if let Some(entry) = self.entries.iter_mut().find(|entry| entry.key == key) {
+            entry.last_seen = self.sequence;
+            entry.repeat_count += 1;
+            if entry.repeat_count >= LOG_DEDUP_FLUSH_THRESHOLD {
+                if let Some(repeated) = entry.repeated_line() {
+                    lines.push(repeated);
+                }
+                entry.repeat_count = 0;
             }
-            return Vec::new();
+            return lines;
         }
 
-        let mut lines = Vec::new();
-        lines.extend(self.repeated_line());
-        lines.push(line.clone());
-        self.last = Some(line);
-        self.repeat_count = 0;
+        self.entries.push(DedupEntry {
+            key,
+            summary_message,
+            last_seen: self.sequence,
+            repeat_count: 0,
+        });
+        lines.push(line);
         lines
     }
 
+    fn drain_expired(&mut self) -> Vec<DedupLine> {
+        let mut lines = Vec::new();
+        self.entries.retain(|entry| {
+            if self.sequence.saturating_sub(entry.last_seen) <= LOG_DEDUP_WINDOW {
+                return true;
+            }
+            if let Some(repeated) = entry.repeated_line() {
+                lines.push(repeated);
+            }
+            false
+        });
+        lines
+    }
+}
+
+impl DedupEntry {
     fn repeated_line(&self) -> Option<DedupLine> {
-        let last = self.last.as_ref()?;
         if self.repeat_count == 0 {
             return None;
         }
 
         Some(DedupLine {
-            level: last.level,
-            channel_id: last.channel_id,
+            level: self.key.level,
+            channel_id: self.key.channel_id,
             message: format!(
                 "{} (repeated {} time{})",
-                last.message,
+                self.summary_message,
                 self.repeat_count,
                 if self.repeat_count == 1 { "" } else { "s" }
             ),
         })
     }
+}
+
+fn ffmpeg_log_fingerprint(message: &str) -> (String, String) {
+    const MATROSKA_PREFIX: &str = "[matroska @ 0x";
+    const NEGATIVE_PTS: &str = "] failed to avoid negative pts ";
+    const NEW_CLUSTER: &str = "] Starting new cluster due to timestamp";
+
+    if let Some(rest) = message.strip_prefix(MATROSKA_PREFIX)
+        && let Some((address, rest)) = rest.split_once(NEGATIVE_PTS)
+        && !address.is_empty()
+        && address
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+        && let Some((pts, stream)) = rest.split_once(" in stream ")
+        && pts.parse::<i64>().is_ok()
+    {
+        let stream = stream.trim_end_matches('.');
+        if !stream.is_empty() && stream.chars().all(|character| character.is_ascii_digit()) {
+            let summary = format!("[matroska] failed to avoid negative pts in stream {stream}");
+            return (summary.clone(), summary);
+        }
+    }
+
+    if let Some(rest) = message.strip_prefix(MATROSKA_PREFIX)
+        && let Some((address, suffix)) = rest.split_once(NEW_CLUSTER)
+        && !address.is_empty()
+        && address
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+        && suffix.is_empty()
+    {
+        let summary = "[matroska] Starting new cluster due to timestamp".to_string();
+        return (summary.clone(), summary);
+    }
+
+    (message.to_string(), message.to_string())
 }
 
 fn remember_unexpected_rtmp_stream(message: &str) {
@@ -329,8 +409,8 @@ mod tests {
     use ffmpeg_next::{ffi, util::log::Level as FfmpegLevel};
 
     use super::{
-        DedupLine, LogDedup, level_value, mark_ingest_interrupted, should_skip_ffmpeg_log,
-        with_ingest_logs,
+        DedupLine, LogDedup, ffmpeg_log_fingerprint, level_value, mark_ingest_interrupted,
+        should_skip_ffmpeg_log, with_ingest_logs,
     };
 
     #[test]
@@ -346,20 +426,78 @@ mod tests {
             }]
         );
         assert!(dedup.push(24, "same").is_empty());
+        assert_eq!(dedup.push(24, "next")[0].message, "next");
+
+        let mut flushed = Vec::new();
+        for index in 0..7 {
+            flushed.extend(dedup.push(24, &format!("filler {index}")));
+        }
+        assert!(flushed.iter().any(|line| {
+            line.message == "same (repeated 1 time)" && line.level == 24 && line.channel_id == 0
+        }));
+    }
+
+    #[test]
+    fn deduplicates_identical_lines_interleaved_within_six_lines() {
+        let mut dedup = LogDedup::new();
+
+        assert_eq!(dedup.push(24, "one")[0].message, "one");
+        assert_eq!(dedup.push(24, "two")[0].message, "two");
+        assert!(dedup.push(24, "one").is_empty());
+        assert!(dedup.push(24, "two").is_empty());
+
+        let mut flushed = Vec::new();
+        for index in 0..7 {
+            flushed.extend(dedup.push(24, &format!("filler {index}")));
+        }
+        assert!(
+            flushed
+                .iter()
+                .any(|line| line.message == "one (repeated 1 time)")
+        );
+        assert!(
+            flushed
+                .iter()
+                .any(|line| line.message == "two (repeated 1 time)")
+        );
+    }
+
+    #[test]
+    fn emits_a_line_again_after_it_leaves_the_six_line_window() {
+        let mut dedup = LogDedup::new();
+
+        assert_eq!(dedup.push(24, "same").len(), 1);
+        for index in 0..6 {
+            dedup.push(24, &format!("different {index}"));
+        }
+        assert_eq!(dedup.push(24, "same")[0].message, "same");
+    }
+
+    #[test]
+    fn fingerprints_matroska_timestamp_spam() {
+        let mut dedup = LogDedup::new();
+        let first =
+            "[matroska @ 0x7f2cd59f42c0] failed to avoid negative pts -3326966 in stream 1.";
+        let second =
+            "[matroska @ 0x7f2cd59f42c0] failed to avoid negative pts -3326946 in stream 1.";
+
+        assert_eq!(dedup.push(24, first)[0].message, first);
+        assert!(dedup.push(24, second).is_empty());
+
+        let mut flushed = Vec::new();
+        for index in 0..7 {
+            flushed.extend(dedup.push(24, &format!("filler {index}")));
+        }
+        assert!(flushed.iter().any(|line| {
+            line.message == "[matroska] failed to avoid negative pts in stream 1 (repeated 1 time)"
+        }));
+
         assert_eq!(
-            dedup.push(24, "next"),
-            vec![
-                DedupLine {
-                    level: 24,
-                    channel_id: 0,
-                    message: "same (repeated 1 time)".to_string(),
-                },
-                DedupLine {
-                    level: 24,
-                    channel_id: 0,
-                    message: "next".to_string(),
-                },
-            ]
+            ffmpeg_log_fingerprint("[matroska @ 0xaaaa] Starting new cluster due to timestamp"),
+            (
+                "[matroska] Starting new cluster due to timestamp".to_string(),
+                "[matroska] Starting new cluster due to timestamp".to_string(),
+            )
         );
     }
 

@@ -513,6 +513,37 @@ pub(crate) fn play_opened_input<O: FrameOutput>(
         timeline.video_pts
             + div_ceil(i128::from(duration_us) * i128::from(cfg.fps), 1_000_000) as i64
     });
+    let audio_end_pts = (external_audio.is_none())
+        .then_some(audio_duration_us)
+        .flatten()
+        .map(|duration_us| {
+            let duration_us = duration_us.saturating_sub(seek_us);
+            timeline.audio_pts
+                + div_ceil(
+                    i128::from(duration_us) * i128::from(cfg.sample_rate),
+                    1_000_000,
+                ) as i64
+        });
+    let audio_padding_end_pts = match (video_duration_us, audio_duration_us) {
+        (Some(video_duration), Some(audio_duration))
+            if audio_duration.saturating_add(MEDIA_DURATION_TOLERANCE_US) < video_duration =>
+        {
+            audio_end_pts
+        }
+        _ => None,
+    };
+    let video_padding_end_pts = if !has_video && embedded_audio {
+        Some(timeline.video_pts)
+    } else {
+        match (video_duration_us, audio_duration_us) {
+            (Some(video_duration), Some(audio_duration))
+                if video_duration.saturating_add(MEDIA_DURATION_TOLERANCE_US) < audio_duration =>
+            {
+                video_end_pts
+            }
+            _ => None,
+        }
+    };
     let logo_fade_plan = options
         .logo_fade_plan
         .with_end_pts(video_limit_pts.or(video_end_pts));
@@ -615,6 +646,26 @@ pub(crate) fn play_opened_input<O: FrameOutput>(
                     &mut decoded_audio_samples,
                     audio_limit_pts,
                     media_fade_plan,
+                    options.playback_control,
+                )?;
+            }
+
+            // av_read_frame reports EOF for the whole input, not for each
+            // stream. Use reliable per-stream durations to start padding as
+            // soon as one embedded track reaches its declared end. Waiting
+            // for container EOF can otherwise enqueue minutes of old audio or
+            // video timestamps after the other stream has already advanced.
+            if external_audio.is_none() {
+                let last_video_frame = video
+                    .as_ref()
+                    .and_then(|video| video.last_composited_frame.as_ref());
+                synchronize_declared_stream_ends(
+                    cfg,
+                    timeline,
+                    output,
+                    video_padding_end_pts,
+                    audio_padding_end_pts,
+                    last_video_frame,
                     options.playback_control,
                 )?;
             }
@@ -1791,6 +1842,56 @@ fn synchronize_silence_to_video<O: FrameOutput>(
     check_playback_control(playback_control)
 }
 
+/// Keep streams interleaved once one embedded track reaches its declared end.
+/// FFmpeg only reports container EOF, so without this guard a short track is
+/// padded all at once after packets from the longer track have already been
+/// muxed far into the future.
+fn synchronize_declared_stream_ends<O: FrameOutput>(
+    cfg: &OutputConfig,
+    timeline: &mut Timeline,
+    output: &mut O,
+    video_end_pts: Option<i64>,
+    audio_end_pts: Option<i64>,
+    last_video_frame: Option<&frame::Video>,
+    playback_control: &PlaybackControl,
+) -> Result<()> {
+    check_playback_control(playback_control)?;
+
+    // Decoder priming and end padding can make the decoded sample count end
+    // slightly before the container duration. Two codec frames cover AAC's
+    // usual priming plus the final partial frame without masking a real gap.
+    let audio_end_tolerance = (output.audio_frame_size().max(1) as i64).saturating_mul(2);
+    let audio_end_reached = audio_end_pts.is_some_and(|end_pts| {
+        timeline.audio_pts >= end_pts
+            || (timeline.audio_pts >= end_pts.saturating_sub(audio_end_tolerance)
+                && i128::from(timeline.video_pts) * i128::from(cfg.sample_rate)
+                    >= i128::from(end_pts) * i128::from(cfg.fps))
+    });
+    if audio_end_reached {
+        synchronize_silence_to_video(cfg, timeline, output, playback_control)?;
+    }
+
+    let video_end_reached = video_end_pts.is_some_and(|end_pts| {
+        timeline.video_pts >= end_pts
+            || (timeline.video_pts >= end_pts.saturating_sub(1)
+                && i128::from(timeline.audio_pts) * i128::from(cfg.fps)
+                    >= i128::from(end_pts) * i128::from(cfg.sample_rate))
+    });
+    if video_end_reached {
+        let (video_frames, _) = padding_to_sync(
+            timeline.video_pts,
+            timeline.audio_pts,
+            cfg.fps,
+            cfg.sample_rate,
+        )?;
+        if video_frames > 0 {
+            write_padding_video_frames(cfg, timeline, output, video_frames, last_video_frame)?;
+        }
+    }
+
+    check_playback_control(playback_control)
+}
+
 fn synchronize_after_skip<O: FrameOutput>(
     cfg: &OutputConfig,
     timeline: &mut Timeline,
@@ -2112,7 +2213,8 @@ mod tests {
         Timeline, apply_audio_fade, fallback_video_time_base, fit_dimensions, has_valid_time_base,
         padding_to_sync, parse_duration_us, play_clip, play_clip_with_external_audio,
         resample_audio_frame, should_play_loop_iteration, single_frame_repeat_frames,
-        synchronize_after_skip, video_frame_needs_write, write_padding_video_frames,
+        synchronize_after_skip, synchronize_declared_stream_ends, video_frame_needs_write,
+        write_padding_video_frames,
     };
     use crate::{
         output::FrameOutput,
@@ -2189,6 +2291,62 @@ mod tests {
     #[test]
     fn pads_short_video_to_audio_duration() {
         assert_eq!(padding_to_sync(49, 96_000, 25, 48_000).unwrap(), (1, 0));
+    }
+
+    #[test]
+    fn declared_audio_end_is_padded_while_video_continues() {
+        let cfg = OutputConfig::new(320, 240, 25, 48_000);
+        let mut timeline = Timeline {
+            video_pts: 26,
+            audio_pts: 48_000,
+            ..Timeline::new()
+        };
+        let mut output = RecordingOutput::default();
+
+        synchronize_declared_stream_ends(
+            &cfg,
+            &mut timeline,
+            &mut output,
+            Some(250),
+            Some(48_000),
+            None,
+            &PlaybackControl::default(),
+        )
+        .unwrap();
+
+        assert_eq!(timeline.video_pts, 26);
+        assert_eq!(timeline.audio_pts, 49_920);
+        assert_eq!(output.audio_samples, 1_920);
+        assert_eq!(output.events, ["audio", "audio"]);
+    }
+
+    #[test]
+    fn declared_video_end_is_padded_while_audio_continues() {
+        let cfg = OutputConfig::new(320, 240, 25, 48_000);
+        let mut timeline = Timeline {
+            video_pts: 25,
+            audio_pts: 49_920,
+            ..Timeline::new()
+        };
+        let mut output = RecordingOutput::default();
+        let last_frame = frame::Video::new(Pixel::YUV420P, 320, 240);
+
+        synchronize_declared_stream_ends(
+            &cfg,
+            &mut timeline,
+            &mut output,
+            Some(25),
+            Some(480_000),
+            Some(&last_frame),
+            &PlaybackControl::default(),
+        )
+        .unwrap();
+
+        assert_eq!(timeline.video_pts, 26);
+        assert_eq!(timeline.audio_pts, 49_920);
+        assert_eq!(output.video_frames.len(), 1);
+        assert_eq!(output.video_frames[0].2, 25);
+        assert_eq!(output.events, ["video"]);
     }
 
     #[test]
@@ -2510,6 +2668,16 @@ mod tests {
 
         assert_eq!(timeline.video_pts, 250);
         assert_eq!(timeline.audio_pts, 480_000);
+        let longest_video_run = output
+            .events
+            .split(|event| *event == "audio")
+            .map(|events| events.iter().filter(|event| **event == "video").count())
+            .max()
+            .unwrap_or_default();
+        assert!(
+            longest_video_run <= 10,
+            "short embedded audio must be followed by interleaved silence; longest video run was {longest_video_run}"
+        );
         assert_eq!(output.events.last(), Some(&"video_finished"));
     }
 
@@ -2555,6 +2723,39 @@ mod tests {
             "silence must be interleaved before the video stream finishes"
         );
         assert_eq!(output.events.last(), Some(&"video_finished"));
+    }
+
+    #[test]
+    fn plays_audio_without_video_and_generates_interleaved_black_frames() {
+        let cfg = OutputConfig::new(320, 240, 25, 48_000);
+        let mut timeline = Timeline::new();
+        let mut output = RecordingOutput::default();
+
+        play_clip(
+            &media_mix_asset("audio.mp3"),
+            &cfg,
+            &mut timeline,
+            &mut output,
+            None,
+            Some(1.0),
+            None,
+            LogoFade::default(),
+            &PlaybackControl::default(),
+        )
+        .unwrap();
+
+        assert!((25..=26).contains(&timeline.video_pts));
+        assert!((48_000..=50_000).contains(&timeline.audio_pts));
+        let longest_audio_run = output
+            .events
+            .split(|event| *event == "video")
+            .map(|events| events.iter().filter(|event| **event == "audio").count())
+            .max()
+            .unwrap_or_default();
+        assert!(
+            longest_audio_run <= 4,
+            "audio-only input must interleave generated video; longest audio run was {longest_audio_run}"
+        );
     }
 
     #[test]
