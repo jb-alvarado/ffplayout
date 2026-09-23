@@ -523,7 +523,14 @@ function runControl(button: PlayerControlButton) {
                                     ]"
                                     @click="runControl(button)"
                                 >
-                                    <i :class="button.icon" />
+                                    <i
+                                        :class="[
+                                            button.icon,
+                                            (!controlsUnlocked ||
+                                                (button.target === 'playout' && playlistStore.ingestRuns)) &&
+                                                'opacity-40',
+                                        ]"
+                                    />
                                 </button>
                             </div>
                         </div>
@@ -548,10 +555,11 @@ function runControl(button: PlayerControlButton) {
                             <span class="h-6 w-px shrink-0 bg-base-content/30" aria-hidden="true" />
                             <button
                                 class="btn btn-sm px-1 btn-primary text-xl text-base-content/70"
-                                :class="volumeIcon()"
                                 :disabled="!controlsUnlocked"
                                 @click="muteAudio"
-                            />
+                            >
+                                <i :class="[volumeIcon(), !controlsUnlocked && 'opacity-40']" />
+                            </button>
                             <input
                                 v-model.number="volumeLevel"
                                 type="range"
