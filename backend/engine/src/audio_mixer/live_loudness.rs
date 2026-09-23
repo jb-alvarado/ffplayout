@@ -4,8 +4,9 @@
 //! programme-integrated value.  The latter is a reporting metric and must not
 //! steer a live programme because it never forgets earlier material.
 
+use std::sync::{Arc, PoisonError, RwLock};
+
 use ffmpeg_next::frame;
-use std::sync::{Arc, RwLock};
 
 use crate::analysis::loudness::LoudnessAnalyzer;
 
@@ -68,17 +69,11 @@ impl LiveLoudnessControl {
     }
 
     pub fn settings(&self) -> LiveLoudnessSettings {
-        *self
-            .0
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        *self.0.read().unwrap_or_else(PoisonError::into_inner)
     }
 
     pub fn update(&self, enabled: bool, config: LiveLoudnessConfig) {
-        let mut settings = self
-            .0
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut settings = self.0.write().unwrap_or_else(PoisonError::into_inner);
         *settings = LiveLoudnessSettings {
             enabled,
             config,
@@ -89,14 +84,14 @@ impl LiveLoudnessControl {
     pub fn metrics(&self) -> LiveLoudnessMetrics {
         self.0
             .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(PoisonError::into_inner)
             .metrics
     }
 
     pub(crate) fn set_metrics(&self, metrics: LiveLoudnessMetrics) {
         self.0
             .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(PoisonError::into_inner)
             .metrics = metrics;
     }
 }
@@ -143,6 +138,7 @@ impl LiveLoudnessProcessor {
         config: LiveLoudnessConfig,
     ) -> Result<Self, ebur128_stream::Error> {
         let analyzer = LoudnessAnalyzer::new(sample_rate)?;
+
         Ok(Self {
             analyzer,
             config,
@@ -180,6 +176,7 @@ impl LiveLoudnessProcessor {
         if frame.planes() != 2 || frame.samples() == 0 {
             return;
         }
+
         for plane in 0..2 {
             for sample in frame.plane_mut::<f32>(plane) {
                 if !sample.is_finite() {
@@ -214,9 +211,11 @@ impl LiveLoudnessProcessor {
         let Some(loudness) = loudness else {
             return;
         };
+
         if loudness < self.config.silence_gate_lufs {
             return;
         }
+
         let error = self.config.target_lufs - loudness;
         let desired = if error.abs() <= self.config.dead_band_lu {
             0.0
@@ -238,10 +237,12 @@ impl LiveLoudnessProcessor {
         let gain = db_to_gain(self.rider_gain_db) as f32;
         let ceiling = db_to_gain(self.config.true_peak_ceiling_dbtp) as f32;
         let mut most_reduction = 0.0_f64;
+
         for plane in 0..2 {
             for sample in frame.plane_mut::<f32>(plane) {
                 let scaled = *sample * gain;
                 let limited = scaled.clamp(-ceiling, ceiling);
+
                 if scaled != 0.0 && limited != scaled {
                     most_reduction =
                         most_reduction.max(-20.0 * f64::from((limited / scaled).abs()).log10());
@@ -249,6 +250,7 @@ impl LiveLoudnessProcessor {
                 *sample = limited;
             }
         }
+
         self.metrics.limiter_gain_reduction_db = most_reduction;
     }
 }
@@ -270,6 +272,7 @@ mod tests {
         let mut processor =
             LiveLoudnessProcessor::new(48_000, LiveLoudnessConfig::default()).unwrap();
         let mut frame = frame::Audio::new(Sample::F32(Type::Planar), 48_000, ChannelLayout::STEREO);
+
         for plane in 0..2 {
             frame.plane_mut::<f32>(plane).fill(1.0);
         }

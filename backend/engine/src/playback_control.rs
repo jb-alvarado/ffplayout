@@ -1,6 +1,9 @@
-use std::sync::{
-    Arc, Mutex,
-    atomic::{AtomicBool, Ordering},
+use std::{
+    mem,
+    sync::{
+        Arc, Mutex, PoisonError,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 #[derive(Debug, Default)]
@@ -40,7 +43,7 @@ impl PlaybackControl {
     pub fn live_active(&self) -> bool {
         self.navigation
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(PoisonError::into_inner)
             .live_active
     }
 
@@ -55,7 +58,7 @@ impl PlaybackControl {
         let mut state = self
             .navigation
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
 
         if state.live_active {
             return Err(NavigationBlocked::Live);
@@ -79,10 +82,11 @@ impl PlaybackControl {
         let mut state = self
             .navigation
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
         if state.live_active || state.reserved || state.requested {
             return None;
         }
+
         state.live_active = true;
         Some(LiveSession {
             control: self.clone(),
@@ -101,11 +105,11 @@ impl PlaybackControl {
         let mut state = self
             .navigation
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
         if state.live_active || state.reserved {
             return false;
         }
-        std::mem::take(&mut state.requested)
+        mem::take(&mut state.requested)
     }
 }
 
@@ -125,7 +129,7 @@ impl PlaylistNavigation {
             .control
             .navigation
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
         state.requested = true;
         // Drop releases the reservation after this lock, making the request
         // visible only after the caller has completed all state updates.
@@ -137,7 +141,7 @@ impl Drop for PlaylistNavigation {
         self.control
             .navigation
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(PoisonError::into_inner)
             .reserved = false;
     }
 }
@@ -151,13 +155,15 @@ impl Drop for LiveSession {
         self.control
             .navigation
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(PoisonError::into_inner)
             .live_active = false;
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Barrier;
+
     use super::*;
 
     #[test]
@@ -169,6 +175,7 @@ mod tests {
             control.begin_navigation(),
             Err(NavigationBlocked::Busy)
         ));
+
         for _ in 0..3 {
             assert!(
                 crate::playout::check_playback_control(&control)
@@ -228,7 +235,7 @@ mod tests {
     #[test]
     fn simultaneous_navigation_and_live_takeover_are_mutually_exclusive() {
         let control = PlaybackControl::default();
-        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let barrier = Arc::new(Barrier::new(2));
         let worker_control = control.clone();
         let worker_barrier = barrier.clone();
         let worker = std::thread::spawn(move || {

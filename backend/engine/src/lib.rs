@@ -1,5 +1,5 @@
 use std::{
-    sync::Arc,
+    sync::{Arc, Mutex, PoisonError},
     time::{Duration, Instant},
 };
 
@@ -97,20 +97,20 @@ pub struct Playout {
 
 #[derive(Clone)]
 pub struct HlsHealth {
-    last_muxed_at: Arc<std::sync::Mutex<Instant>>,
+    last_muxed_at: Arc<Mutex<Instant>>,
 }
 
 impl HlsHealth {
     pub(crate) fn new() -> Self {
         Self {
-            last_muxed_at: Arc::new(std::sync::Mutex::new(Instant::now())),
+            last_muxed_at: Arc::new(Mutex::new(Instant::now())),
         }
     }
 
     pub fn last_muxed_age(&self) -> Duration {
         self.last_muxed_at
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(PoisonError::into_inner)
             .elapsed()
     }
 
@@ -118,7 +118,7 @@ impl HlsHealth {
         *self
             .last_muxed_at
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Instant::now();
+            .unwrap_or_else(PoisonError::into_inner) = Instant::now();
     }
 }
 
@@ -191,6 +191,7 @@ impl AsyncPlayout {
         })
         .await?;
         playout.hls_health = Some(hls_health);
+
         Ok(playout)
     }
 
@@ -421,6 +422,7 @@ fn run_async_playout_worker(mut playout: Playout, commands: mpsc::Receiver<Async
         {
             continue;
         }
+
         match command {
             AsyncCommand::Play {
                 path,
@@ -469,6 +471,7 @@ fn run_async_playout_worker(mut playout: Playout, commands: mpsc::Receiver<Async
     drop(live);
     let channel_id = playout.config.channel_id.unwrap_or_default();
     let result = playout.finish();
+
     if let Some(response) = finish_response {
         let _ = response.send(result);
     } else if let Err(error) = result {
@@ -557,6 +560,7 @@ impl Playout {
         if !fallback_duration.is_finite() || fallback_duration <= 0.0 {
             return Err(anyhow!("fallback duration must be a positive number"));
         }
+
         Ok(())
     }
 
@@ -656,9 +660,11 @@ impl Playout {
             let path = path.to_string();
             let mut live_for_worker = live.take();
             let benchmark = benchmark::start(config.channel_id);
+
             if let Some(live) = live_for_worker.as_ref() {
                 live.set_benchmark(Some(benchmark.clone()));
             }
+
             let operation = self.output.run_desktop(benchmark, move |output| {
                 let result = if let Some(live) = live_for_worker.as_mut() {
                     let mut output = LiveOverrideOutput::new(output, live, &playback_control);
@@ -694,6 +700,7 @@ impl Playout {
                         },
                     )
                 };
+
                 if matches!(&result, Ok(ClipResult::LiveEnded))
                     && let Some(live) = live_for_worker.as_ref()
                 {
@@ -735,6 +742,7 @@ impl Playout {
                     },
                 )
             };
+
             if matches!(&result, Ok(ClipResult::LiveEnded)) {
                 live.reanchor_timeline(&mut self.timeline);
             }
@@ -774,6 +782,7 @@ fn init_ffmpeg(config: &OutputConfig) -> Result<()> {
         &config.ffmpeg_ignore_lines,
         config.channel_id,
     );
+
     Ok(())
 }
 
@@ -812,6 +821,7 @@ fn play_to_output<O: FrameOutput>(
             match write_fallback(path, config, timeline, output, duration, playback_control) {
                 Ok(()) => {
                     timeline.finish_logo_fade(options.logo_fade);
+
                     Ok(ClipResult::Fallback { reason })
                 }
                 Err(error) => classify_fallback_error(error, path),
@@ -836,6 +846,9 @@ fn classify_fallback_error(error: anyhow::Error, path: &str) -> Result<ClipResul
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "tokio")]
+    use std::{env, process};
+
     use super::{
         ClipResult, PlaybackControl, PlaybackRestart, PlaybackSkipped, classify_fallback_error,
     };
@@ -870,8 +883,7 @@ mod tests {
     #[test]
     fn dropping_async_playout_discards_queued_work_and_finishes_worker() {
         use super::*;
-        let directory =
-            std::env::temp_dir().join(format!("ffplayout-drop-worker-{}", std::process::id()));
+        let directory = env::temp_dir().join(format!("ffplayout-drop-worker-{}", process::id()));
         std::fs::create_dir_all(&directory).unwrap();
         let path = directory.join("output.mkv");
         let playback_control = PlaybackControl::default();
@@ -899,6 +911,7 @@ mod tests {
             hls_health: None,
         };
         let mut responses = Vec::new();
+
         for _ in 0..2 {
             let (response, result) = oneshot::channel();
             owner
@@ -920,6 +933,7 @@ mod tests {
         assert!(playback_control.is_shutdown());
         release.send(()).unwrap();
         finished.recv_timeout(Duration::from_secs(5)).unwrap();
+
         for mut response in responses {
             assert!(matches!(
                 response.try_recv(),

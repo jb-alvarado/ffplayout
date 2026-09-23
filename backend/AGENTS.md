@@ -1,6 +1,6 @@
 # Engine code guidelines
 
-These instructions apply to `backend/engine/`. Prefer clear, maintainable Rust
+These instructions apply to `backend/`. Prefer clear, maintainable Rust
 over clever or overly compact code. Follow the existing architecture and run
 `cargo fmt` after editing Rust files.
 
@@ -25,6 +25,9 @@ over clever or overly compact code. Follow the existing architecture and run
   `Ok(...)`, `Err(...)`, an explicit `return`, or another returned value, when
   earlier statements precede it. Do not add an empty line to a function that
   consists only of that expression.
+- Separate adjacent methods in `impl` and `trait` blocks with a blank line,
+  including methods declared as `pub(crate) fn` or preceded by attributes or
+  documentation comments.
 - Use comments to explain intent, invariants, and non-obvious trade-offs, not
   to repeat what the code already says.
 

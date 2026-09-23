@@ -1,5 +1,5 @@
 use std::sync::{
-    Arc, RwLock,
+    Arc, PoisonError, RwLock,
     atomic::{AtomicUsize, Ordering},
 };
 
@@ -35,6 +35,7 @@ impl LoudnessAnalyzer {
         if frame.planes() != 2 || frame.samples() == 0 {
             return self.metrics;
         }
+
         if self
             .analyzer
             .push_planar::<f32>(&[frame.plane::<f32>(0), frame.plane::<f32>(1)])
@@ -42,6 +43,7 @@ impl LoudnessAnalyzer {
         {
             return self.metrics;
         }
+
         let snapshot = self.analyzer.snapshot();
         self.metrics = LoudnessMetrics {
             momentary_lufs: snapshot.momentary_lufs(),
@@ -63,29 +65,25 @@ impl LoudnessMeterControl {
     pub fn subscribe(&self) {
         self.subscribers.fetch_add(1, Ordering::Relaxed);
     }
+
     pub fn unsubscribe(&self) {
         let _ = self
             .subscribers
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1));
     }
+
     pub fn active(&self) -> bool {
         self.subscribers.load(Ordering::Relaxed) > 0
     }
+
     pub fn metrics(&self) -> Option<LoudnessMetrics> {
         self.active()
-            .then(|| {
-                *self
-                    .metrics
-                    .read()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-            })
+            .then(|| *self.metrics.read().unwrap_or_else(PoisonError::into_inner))
             .flatten()
     }
+
     fn set_metrics(&self, metrics: LoudnessMetrics) {
-        *self
-            .metrics
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(metrics);
+        *self.metrics.write().unwrap_or_else(PoisonError::into_inner) = Some(metrics);
     }
 }
 
@@ -94,6 +92,7 @@ pub(crate) struct LoudnessMeter {
     analyzer: Option<LoudnessAnalyzer>,
     sample_rate: u32,
 }
+
 impl LoudnessMeter {
     pub(crate) fn new(sample_rate: u32, control: LoudnessMeterControl) -> Self {
         Self {
@@ -102,14 +101,18 @@ impl LoudnessMeter {
             sample_rate,
         }
     }
+
     pub(crate) fn process_frame(&mut self, frame: &frame::Audio) {
         if !self.control.active() {
             self.analyzer = None;
+
             return;
         }
+
         if self.analyzer.is_none() {
             self.analyzer = LoudnessAnalyzer::new(self.sample_rate).ok();
         }
+
         if let Some(analyzer) = &mut self.analyzer {
             self.control.set_metrics(analyzer.process_frame(frame));
         }

@@ -1,5 +1,6 @@
+use std::{collections::BTreeMap, ffi::CString, mem, ptr};
+
 use ffmpeg_next::ffi;
-use std::{collections::BTreeMap, ffi::CString, ptr};
 
 use super::config::StreamType;
 
@@ -53,9 +54,11 @@ pub fn validate_output_protocol_options(
 
     for (name, value) in options {
         let name = name.as_str();
+
         if name.trim() != name || name.is_empty() || value.trim().is_empty() {
             return Err("protocol option names and values must not be empty".to_string());
         }
+
         if matches!(name, "rw_timeout" | "timeout" | "listen_timeout") {
             return Err(format!(
                 "protocol option {name:?} is managed by ffplayout and cannot be overridden"
@@ -65,6 +68,7 @@ pub fn validate_output_protocol_options(
     }
 
     validate_url_option_conflicts(protocol, url, options)?;
+
     Ok(())
 }
 
@@ -90,9 +94,12 @@ fn validate_url_option_conflicts(
     ) {
         return Ok(());
     }
+
     let mut configured = BTreeMap::new();
+
     for (name, value) in options {
         let name = canonical_option_name(protocol, name);
+
         if configured
             .insert(name, value.as_str())
             .is_some_and(|old| old != value)
@@ -100,15 +107,18 @@ fn validate_url_option_conflicts(
             return Err(format!("conflicting aliases for protocol option {name:?}"));
         }
     }
+
     let Some((_, query)) = url.split_once('?') else {
         return Ok(());
     };
+
     for parameter in query.split('&') {
         let (name, value) = parameter.split_once('=').unwrap_or((parameter, ""));
         let name = canonical_option_name(protocol, name);
         // Match FFmpeg's av_find_info_tag: '+' means space; percent escapes
         // are not decoded. Check every occurrence to reject ambiguous duplicates.
         let value = value.replace('+', " ");
+
         if configured
             .get(name)
             .is_some_and(|configured| *configured != value)
@@ -119,6 +129,7 @@ fn validate_url_option_conflicts(
             ));
         }
     }
+
     Ok(())
 }
 
@@ -140,11 +151,13 @@ fn validate_protocol_option(
         (OutputProtocol::Srt, "linger") => number.is_some_and(|v| (-1..=10).contains(&v)),
         _ => true,
     };
+
     if !valid {
         return Err(format!(
             "protocol option {name:?} violates output lifecycle constraints"
         ));
     }
+
     Ok(())
 }
 
@@ -167,9 +180,11 @@ fn validate_native_option(scheme: &str, name: &str, value: &str) -> Result<Optio
     // metadata. av_opt_find with FAKE_OBJ reads only the class pointer.
     unsafe {
         let class = ffi::avio_protocol_get_class(scheme.as_ptr());
+
         if class.is_null() {
             return Err("output protocol options unavailable in this FFmpeg build".to_string());
         }
+
         let fake = (&class as *const *const ffi::AVClass).cast_mut().cast();
         let option = ffi::av_opt_find(
             fake,
@@ -178,12 +193,14 @@ fn validate_native_option(scheme: &str, name: &str, value: &str) -> Result<Optio
             ffi::AV_OPT_FLAG_ENCODING_PARAM,
             ffi::AV_OPT_SEARCH_FAKE_OBJ,
         );
+
         if option.is_null() {
             return Err(format!(
                 "FFmpeg does not support output protocol option {name:?}"
             ));
         }
         use ffi::AVOptionType::*;
+
         if !matches!(
             (*option).type_,
             AV_OPT_TYPE_INT
@@ -199,18 +216,22 @@ fn validate_native_option(scheme: &str, name: &str, value: &str) -> Result<Optio
         // Relocate just the selected scalar into our own aligned storage.
         // Copy constants so FFmpeg retains symbolic values such as caller.
         let mut selected = *option;
-        selected.offset = std::mem::offset_of!(OptionValue, storage) as i32;
+        selected.offset = mem::offset_of!(OptionValue, storage) as i32;
         let mut options = vec![selected];
         let mut current = ptr::null();
+
         loop {
             current = ffi::av_opt_next(fake, current);
+
             if current.is_null() {
                 break;
             }
+
             if (*current).type_ == AV_OPT_TYPE_CONST {
                 options.push(*current);
             }
         }
+
         let mut sentinel = selected;
         sentinel.name = ptr::null();
         options.push(sentinel);
@@ -220,7 +241,7 @@ fn validate_native_option(scheme: &str, name: &str, value: &str) -> Result<Optio
             item_name: Some(ffi::av_default_item_name),
             option: options.as_ptr(),
             version: ffi::avutil_version() as i32,
-            ..std::mem::zeroed()
+            ..mem::zeroed()
         };
         let mut storage = OptionValue {
             class: &validation_class,
@@ -237,12 +258,14 @@ fn validate_native_option(scheme: &str, name: &str, value: &str) -> Result<Optio
             && ffi::av_opt_get_int(object, key.as_ptr(), 0, &mut number) >= 0;
         // Frees a possible string allocation, never our stack-backed storage.
         ffi::av_opt_free(object);
+
         if result < 0 {
             return Err(format!(
                 "invalid FFmpeg output protocol option {name:?}: {}",
                 ffmpeg_next::Error::from(result)
             ));
         }
+
         Ok(numeric.then_some(number))
     }
 }
@@ -345,6 +368,7 @@ mod tests {
             assert!(error.contains("conflicts with the output URL"), "{error}");
             assert!(!error.contains("secret-in-"));
         }
+
         let options = BTreeMap::from([
             ("pkt_size".to_string(), "188".to_string()),
             ("payload_size".to_string(), "1316".to_string()),
@@ -385,6 +409,7 @@ mod tests {
                 .unwrap_err()
                 .contains("not supported for custom")
         );
+
         for url in [
             "tls://localhost:9000",
             "srt://localhost:9000?mode=listener&timeout=-1",

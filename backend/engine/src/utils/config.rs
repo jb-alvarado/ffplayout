@@ -47,9 +47,11 @@ fn validate_stream_map_value(label: &str, value: &str) -> Result<(), String> {
     if value.is_empty() {
         return Err(format!("{label} must not be empty"));
     }
+
     if value.chars().any(|ch| ch.is_whitespace() || ch == ',') {
         return Err(format!("{label} must not contain whitespace or ','"));
     }
+
     Ok(())
 }
 
@@ -70,6 +72,7 @@ impl FromStr for HlsVariant {
                 "variant name may only contain ASCII letters, numbers, '_' and '-'".to_string(),
             );
         }
+
         let resolution = parts
             .next()
             .ok_or_else(|| "missing variant resolution".to_string())?;
@@ -112,19 +115,25 @@ pub fn validate_output_metadata(metadata: &BTreeMap<String, String>) -> Result<(
     if metadata.len() > 64 {
         return Err("output metadata must contain at most 64 entries".to_string());
     }
+
     let mut total_bytes = 0usize;
+
     for (key, value) in metadata {
         if key.trim().is_empty() || key.len() > 128 || key.chars().any(char::is_control) {
             return Err(format!("invalid output metadata key {key:?}"));
         }
+
         if value.is_empty() || value.len() > 4096 || value.chars().any(char::is_control) {
             return Err(format!("invalid output metadata value for {key:?}"));
         }
+
         total_bytes += key.len() + value.len();
+
         if total_bytes > 16_384 {
             return Err("output metadata exceeds 16 KiB".to_string());
         }
     }
+
     Ok(())
 }
 
@@ -165,6 +174,7 @@ mod output_metadata_tests {
 
 fn parse_bitrate(value: &str) -> Result<u64, String> {
     let value = value.trim();
+
     if value.is_empty() {
         return Err("bitrate must not be empty".to_string());
     }
@@ -180,6 +190,7 @@ fn parse_bitrate(value: &str) -> Result<u64, String> {
     if number == 0 {
         return Err("bitrate must be greater than zero".to_string());
     }
+
     Ok(number * multiplier)
 }
 
@@ -940,11 +951,13 @@ pub(crate) fn apply_audio_encoder_options(
         if key.trim().is_empty() || value.trim().is_empty() {
             return Err("audio option names and values must not be empty".to_string());
         }
+
         if MANAGED_AUDIO_OPTIONS.contains(&key.as_str()) {
             return Err(format!(
                 "audio option {key:?} is managed by ffplayout and cannot be overridden"
             ));
         }
+
         let key_c = CString::new(key.as_str())
             .map_err(|_| format!("audio option name {key:?} contains a NUL byte"))?;
         let value_c = CString::new(value.as_str())
@@ -975,6 +988,7 @@ pub(crate) fn apply_audio_encoder_options(
                 ffmpeg_next::ffi::AV_OPT_SEARCH_CHILDREN,
             )
         };
+
         if result < 0 {
             return Err(format!(
                 "invalid value {value:?} for audio option {key:?}: {}",
@@ -982,6 +996,7 @@ pub(crate) fn apply_audio_encoder_options(
             ));
         }
     }
+
     Ok(())
 }
 
@@ -994,11 +1009,13 @@ pub fn validate_audio_options(
     if options.is_empty() {
         return Ok(());
     }
+
     let codec = codec::encoder::find_by_name(codec_name)
         .ok_or_else(|| format!("audio encoder {codec_name:?} not found"))?;
     if codec.medium() != ffmpeg_next::media::Type::Audio {
         return Err(format!("encoder {codec_name:?} is not an audio encoder"));
     }
+
     let context = audio_encoder_context(
         codec,
         options,
@@ -1025,6 +1042,7 @@ pub(crate) fn audio_encoder_context(
     if sample_rate == 0 || sample_rate > i32::MAX as u32 {
         return Err("audio sample rate must be a positive FFmpeg sample rate".to_string());
     }
+
     let mut context = codec::context::Context::new_with_codec(codec)
         .encoder()
         .audio()
@@ -1048,16 +1066,19 @@ pub(crate) fn audio_encoder_context(
     context.set_channel_layout(ChannelLayout::STEREO);
     context.set_format(sample_format);
     context.set_time_base(time_base);
+
     if audio_codec_uses_bitrate(codec.name()) {
         context.set_bit_rate(
             usize::try_from(bit_rate)
                 .map_err(|_| "audio bitrate exceeds platform limits".to_string())?,
         );
     }
+
     if global_header {
         context.set_flags(codec::flag::Flags::GLOBAL_HEADER);
     }
     apply_audio_encoder_options(&mut context, codec, options)?;
+
     Ok(context)
 }
 
@@ -1074,15 +1095,18 @@ pub fn video_option_defaults(codec: &str) -> VideoOptions {
 
 pub fn validate_video_options(codec: &str, options: &VideoOptions) -> Result<(), String> {
     let specs = video_option_specs(codec);
+
     for (key, value) in options {
         let Some(spec) = specs.iter().find(|spec| spec.key == key) else {
             return Err(format!(
                 "unsupported video option {key:?} for codec {codec:?}"
             ));
         };
+
         if !video_option_is_visible(spec, options) {
             continue;
         }
+
         if spec.kind == VideoOptionKind::Select
             && !spec.choices.iter().any(|choice| choice.value == value)
         {
@@ -1090,6 +1114,7 @@ pub fn validate_video_options(codec: &str, options: &VideoOptions) -> Result<(),
                 "unsupported value {value:?} for video option {key:?}"
             ));
         }
+
         if spec.kind == VideoOptionKind::Number {
             let number = value
                 .parse::<f64>()
@@ -1102,6 +1127,7 @@ pub fn validate_video_options(codec: &str, options: &VideoOptions) -> Result<(),
             }
         }
     }
+
     for spec in specs {
         if video_option_is_visible(spec, options) && !options.contains_key(spec.key) {
             return Err(format!(
@@ -1110,6 +1136,7 @@ pub fn validate_video_options(codec: &str, options: &VideoOptions) -> Result<(),
             ));
         }
     }
+
     Ok(())
 }
 
@@ -1292,6 +1319,7 @@ impl TextOverlayState {
         // the write lock is only needed right after a new config was set.
         {
             let inner = self.inner.read().unwrap_or_else(PoisonError::into_inner);
+
             if inner.config.is_none() || inner.start_pts.is_some() {
                 return TextOverlaySnapshot {
                     revision: inner.revision,
@@ -1302,6 +1330,7 @@ impl TextOverlayState {
         }
 
         let mut inner = self.inner.write().unwrap_or_else(PoisonError::into_inner);
+
         if inner.config.is_some() && inner.start_pts.is_none() {
             inner.start_pts = Some(pts);
         }
@@ -1361,6 +1390,7 @@ impl OutputConfig {
 
     pub fn with_volume(mut self, volume: f64) -> anyhow::Result<Self> {
         self.audio_effects = AudioEffectsControl::new(volume)?;
+
         Ok(self)
     }
 
@@ -1523,9 +1553,11 @@ impl FromStr for OutputSize {
         if width == 0 || height == 0 {
             return Err("width and height must be greater than zero".to_string());
         }
+
         if width % 2 != 0 || height % 2 != 0 {
             return Err("width and height must be even for YUV420 output".to_string());
         }
+
         Ok(Self { width, height })
     }
 }
@@ -1732,9 +1764,11 @@ mod tests {
     #[test]
     fn accepts_valid_libopus_audio_options_when_available() {
         ffmpeg_next::init().ok();
+
         if ffmpeg_next::codec::encoder::find_by_name("libopus").is_none() {
             return;
         }
+
         let options = [("application".to_string(), "lowdelay".to_string())]
             .into_iter()
             .collect();

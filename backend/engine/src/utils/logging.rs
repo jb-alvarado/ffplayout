@@ -172,6 +172,7 @@ unsafe extern "C" fn log_callback(
             &mut print_prefix,
         )
     };
+
     if result < 0 {
         return;
     }
@@ -223,6 +224,7 @@ fn log_line(level: c_int, message: &str) {
     remember_unexpected_rtmp_stream(message);
 
     let mut dedup = LOG_DEDUP.lock().unwrap_or_else(PoisonError::into_inner);
+
     for repeated in dedup.push(level, message) {
         write_log_line(repeated.level, repeated.channel_id, &repeated.message);
     }
@@ -297,12 +299,15 @@ impl LogDedup {
         if let Some(entry) = self.entries.iter_mut().find(|entry| entry.key == key) {
             entry.last_seen = self.sequence;
             entry.repeat_count += 1;
+
             if entry.repeat_count >= LOG_DEDUP_FLUSH_THRESHOLD {
                 if let Some(repeated) = entry.repeated_line() {
                     lines.push(repeated);
                 }
+
                 entry.repeat_count = 0;
             }
+
             return lines;
         }
 
@@ -322,6 +327,7 @@ impl LogDedup {
             if self.sequence.saturating_sub(entry.last_seen) <= LOG_DEDUP_WINDOW {
                 return true;
             }
+
             if let Some(repeated) = entry.repeated_line() {
                 lines.push(repeated);
             }
@@ -365,8 +371,10 @@ fn ffmpeg_log_fingerprint(message: &str) -> (String, String) {
         && pts.parse::<i64>().is_ok()
     {
         let stream = stream.trim_end_matches('.');
+
         if !stream.is_empty() && stream.chars().all(|character| character.is_ascii_digit()) {
             let summary = format!("[matroska] failed to avoid negative pts in stream {stream}");
+
             return (summary.clone(), summary);
         }
     }
@@ -380,6 +388,7 @@ fn ffmpeg_log_fingerprint(message: &str) -> (String, String) {
         && suffix.is_empty()
     {
         let summary = "[matroska] Starting new cluster due to timestamp".to_string();
+
         return (summary.clone(), summary);
     }
 
@@ -395,6 +404,7 @@ fn remember_unexpected_rtmp_stream(message: &str) {
     };
     let actual = actual.trim();
     let expected = expected.trim();
+
     if actual.is_empty() || expected.is_empty() {
         return;
     }
@@ -406,6 +416,9 @@ fn remember_unexpected_rtmp_stream(message: &str) {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "windows")]
+    use std::ptr;
+
     use ffmpeg_next::{ffi, util::log::Level as FfmpegLevel};
 
     use super::{
@@ -429,6 +442,7 @@ mod tests {
         assert_eq!(dedup.push(24, "next")[0].message, "next");
 
         let mut flushed = Vec::new();
+
         for index in 0..7 {
             flushed.extend(dedup.push(24, &format!("filler {index}")));
         }
@@ -447,6 +461,7 @@ mod tests {
         assert!(dedup.push(24, "two").is_empty());
 
         let mut flushed = Vec::new();
+
         for index in 0..7 {
             flushed.extend(dedup.push(24, &format!("filler {index}")));
         }
@@ -467,6 +482,7 @@ mod tests {
         let mut dedup = LogDedup::new();
 
         assert_eq!(dedup.push(24, "same").len(), 1);
+
         for index in 0..6 {
             dedup.push(24, &format!("different {index}"));
         }
@@ -485,6 +501,7 @@ mod tests {
         assert!(dedup.push(24, second).is_empty());
 
         let mut flushed = Vec::new();
+
         for index in 0..7 {
             flushed.extend(dedup.push(24, &format!("filler {index}")));
         }
@@ -559,7 +576,7 @@ mod tests {
 
         unsafe {
             ffi::av_log(
-                std::ptr::null_mut(),
+                ptr::null_mut(),
                 ffi::AV_LOG_ERROR,
                 c"Unexpected stream actual, expecting expected\n".as_ptr(),
             );

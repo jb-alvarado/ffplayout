@@ -326,18 +326,12 @@ mod tests {
             .connect("sqlite::memory:")
             .await
             .unwrap();
-        sqlx::raw_sql(include_str!(
-            "../../../../../migrations/00001_create_tables.sql"
-        ))
-        .execute(&pool)
-        .await
-        .unwrap();
-        sqlx::raw_sql(include_str!(
-            "../../../../../migrations/00002_recording.sql"
-        ))
-        .execute(&pool)
-        .await
-        .unwrap();
+        // Seed the last schema before configuration splitting, then let the
+        // regular migrator apply every later migration.
+        sqlx::migrate!("../../migrations")
+            .run_to(2, &pool)
+            .await
+            .unwrap();
         sqlx::raw_sql(
             "UPDATE configurations SET general_stop_threshold = 17.5,
                 mail_subject = 'Migrated subject', logging_ignore = 'custom warning',
@@ -352,18 +346,7 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        sqlx::raw_sql(include_str!(
-            "../../../../../migrations/00003_split_config.sql"
-        ))
-        .execute(&pool)
-        .await
-        .unwrap();
-        sqlx::raw_sql(include_str!(
-            "../../../../../migrations/00004_pipeline_options.sql"
-        ))
-        .execute(&pool)
-        .await
-        .unwrap();
+        db_migrate(&pool).await.unwrap();
         let config = select_configuration(&pool, 1).await.unwrap();
         assert_eq!(config.general_stop_threshold, 17.5);
         assert_eq!(config.mail_subject, "Migrated subject");

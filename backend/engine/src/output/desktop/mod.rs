@@ -1,6 +1,7 @@
 use std::{
     cell::RefCell,
     collections::VecDeque,
+    mem,
     sync::{
         Arc, Mutex, PoisonError,
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -24,7 +25,18 @@ use winit::{
     window::{Fullscreen, Icon, Window, WindowId},
 };
 
-use super::{EncodedOutput, FrameOutput, PlaybackStopped, vtt};
+mod audio;
+#[cfg(all(feature = "desktop-cpu", not(feature = "desktop-gpu")))]
+mod cpu;
+#[cfg(feature = "desktop-gpu")]
+mod gpu;
+mod graphics;
+mod icon;
+mod render;
+pub(crate) mod thread;
+mod timing;
+mod video;
+
 use crate::{
     analysis::{
         audio_level::{AudioLevelCallback, AudioLevelMeter},
@@ -39,17 +51,7 @@ use crate::{
     },
 };
 
-mod audio;
-#[cfg(all(feature = "desktop-cpu", not(feature = "desktop-gpu")))]
-mod cpu;
-#[cfg(feature = "desktop-gpu")]
-mod gpu;
-mod graphics;
-mod icon;
-mod render;
-pub(crate) mod thread;
-mod timing;
-mod video;
+use super::{EncodedOutput, FrameOutput, PlaybackStopped, vtt};
 
 use audio::DesktopAudio;
 #[cfg(all(feature = "desktop-cpu", not(feature = "desktop-gpu")))]
@@ -219,6 +221,7 @@ fn recording_silence(pts: i64, samples: u64, rate: u32) -> impl Iterator<Item = 
         );
         frame.set_rate(rate);
         frame.set_pts(Some(pts + offset as i64));
+
         for channel in 0..2 {
             frame.plane_mut::<f32>(channel).fill(0.0);
         }
@@ -247,9 +250,11 @@ impl DesktopRecording {
                     }
                     Err(error) => {
                         let _ = ready_sender.send(Err(error.to_string()));
+
                         return;
                     }
                 };
+
                 while let Ok(message) = receiver.recv() {
                     let result = match message {
                         DesktopRecordingMessage::Video {
@@ -258,6 +263,7 @@ impl DesktopRecording {
                             logo_opacity,
                         } => {
                             worker_queue_depth.fetch_sub(1, Ordering::AcqRel);
+
                             if let Some(logo) = logo {
                                 // A referenced frame is read-only across threads. Make the
                                 // full copy in this worker only when compositing is required.
@@ -278,15 +284,19 @@ impl DesktopRecording {
                         }
                         DesktopRecordingMessage::Finish => break,
                     };
+
                     if let Err(error) = result {
                         worker_active.store(false, Ordering::Release);
                         log::error!(channel = channel_id; "Recording disabled: {error}");
+
                         return;
                     }
+
                     if !worker_active.load(Ordering::Acquire) {
                         break;
                     }
                 }
+
                 if let Err(error) = output.finish() {
                     log::error!(channel = channel_id; "Recording disabled: {error}");
                 }
@@ -303,10 +313,12 @@ impl DesktopRecording {
             }),
             Ok(Err(error)) => {
                 let _ = worker.join();
+
                 Err(anyhow!(error))
             }
             Err(_) => {
                 let _ = worker.join();
+
                 Err(anyhow!(
                     "desktop recording worker stopped during initialization"
                 ))
@@ -326,6 +338,7 @@ impl DesktopRecording {
         // reached the recording encoder yet. The worker finishes its current
         // message and then writes the trailer.
         active.store(false, Ordering::Release);
+
         match sender.try_send(DesktopRecordingMessage::Finish) {
             Ok(()) | Err(TrySendError::Disconnected(_)) => {}
             Err(TrySendError::Full(_)) => {
@@ -334,6 +347,7 @@ impl DesktopRecording {
             }
         }
         drop(sender);
+
         if worker.join().is_err() {
             log::warn!(channel = channel_id; "desktop recording worker panicked");
         }
@@ -391,8 +405,10 @@ impl DesktopOutput {
         let recording = cfg.recording.as_ref().and_then(|recording_config| {
             if recording_config.encode.is_none() {
                 log::error!(channel = cfg.channel_id.unwrap_or_default(); "Recording disabled: desktop output requires dedicated recording encode settings");
+
                 return None;
             }
+
             match DesktopRecording::open(cfg, recording_config) {
                 Ok(recording) => Some(recording),
                 Err(error) => {
@@ -401,6 +417,7 @@ impl DesktopOutput {
                 }
             }
         });
+
         Ok(Self {
             renderer,
             audio_effects: Arc::new(Mutex::new(AudioEffectChain::new(
@@ -508,6 +525,7 @@ impl DesktopOutput {
             control_receiver,
             discontinuity_receiver,
         );
+
         if let Err(error) = render_result {
             if error.downcast_ref::<PlaybackStopped>().is_some() {
                 benchmark::detach();
@@ -518,11 +536,13 @@ impl DesktopOutput {
                     benchmark::activate(benchmark);
                     benchmark::finish();
                 });
+
                 return Err(error);
             }
 
             let _ = worker.join();
             benchmark::finish();
+
             return Err(error);
         }
 
@@ -530,6 +550,7 @@ impl DesktopOutput {
             .join()
             .map_err(|_| anyhow!("decode worker panicked"))?;
         benchmark::finish();
+
         Ok(worker_result)
     }
 
@@ -538,6 +559,7 @@ impl DesktopOutput {
         // Finish and drop the renderer first. Its Drop implementation destroys
         // the native window before a recording worker is joined.
         let renderer_result = self.renderer.finish();
+
         if let Some(recording) = recording {
             recording.finish();
         }
@@ -559,12 +581,15 @@ impl FrameOutput for DesktopFrameSender {
                 logo_opacity: self.current_logo_opacity,
             })
         });
+
         if desktop_send.is_err() {
             if recording_slot {
                 self.release_recording_slot();
             }
+
             return Err(PlaybackStopped.into());
         }
+
         if recording_slot {
             match reference_video_frame(frame) {
                 Ok(frame) => self.send_reserved_recording(DesktopRecordingMessage::Video {
@@ -578,6 +603,7 @@ impl FrameOutput for DesktopFrameSender {
                 }
             }
         }
+
         Ok(())
     }
 
@@ -590,6 +616,7 @@ impl FrameOutput for DesktopFrameSender {
             Err(TrySendError::Full(_)) => return Ok(false),
             Err(TrySendError::Disconnected(_)) => return Err(PlaybackStopped.into()),
         }
+
         if self.reserve_recording_slot() {
             match reference_video_frame(frame) {
                 Ok(frame) => self.send_reserved_recording(DesktopRecordingMessage::Video {
@@ -603,6 +630,7 @@ impl FrameOutput for DesktopFrameSender {
                 }
             }
         }
+
         Ok(true)
     }
 
@@ -613,6 +641,7 @@ impl FrameOutput for DesktopFrameSender {
         opacity_factor: f64,
     ) {
         self.current_logo_opacity = opacity_factor;
+
         if self.recording_sender.is_some() && self.recording_logo.is_none() {
             self.recording_logo = Some(Arc::new(logo.clone()));
         }
@@ -644,6 +673,7 @@ impl FrameOutput for DesktopFrameSender {
                     interleaved.push(if left.is_finite() { *left } else { 0.0 });
                     interleaved.push(if right.is_finite() { *right } else { 0.0 });
                 }
+
                 let samples = frame.samples();
                 Ok::<_, anyhow::Error>((interleaved, samples, frame))
             })?;
@@ -657,9 +687,11 @@ impl FrameOutput for DesktopFrameSender {
                 .map_err(|_| anyhow::Error::new(PlaybackStopped))
         })?;
         self.next_audio_pts = frame.pts().unwrap_or(self.next_audio_pts) + frame.samples() as i64;
+
         if self.reserve_recording_slot() {
             self.send_reserved_recording(DesktopRecordingMessage::Audio(recording_frame));
         }
+
         Ok(())
     }
 
@@ -671,6 +703,7 @@ impl FrameOutput for DesktopFrameSender {
             })
             .map_err(|_| PlaybackStopped)?;
         self.next_audio_pts = audio_pts;
+
         Ok(true)
     }
 
@@ -693,6 +726,7 @@ impl FrameOutput for DesktopFrameSender {
         source_start_ms: i64,
     ) -> Result<()> {
         let vtt_path = vtt::sidecar_path(media_path);
+
         if !vtt_path.exists() {
             return Ok(());
         }
@@ -735,7 +769,9 @@ impl FrameOutput for DesktopFrameSender {
                 samples,
             });
         }
+
         self.next_audio_pts += samples as i64;
+
         Ok(true)
     }
 }
@@ -748,11 +784,14 @@ impl DesktopFrameSender {
             .is_some_and(|active| active.load(Ordering::Acquire));
         if !active {
             self.recording_sender = None;
+
             return false;
         }
+
         if self.recording_sender.is_none() {
             return false;
         }
+
         let Some(queue_depth) = &self.recording_queue_depth else {
             return false;
         };
@@ -764,6 +803,7 @@ impl DesktopFrameSender {
             .is_err()
         {
             self.report_recording_overload();
+
             return false;
         }
         true
@@ -778,8 +818,10 @@ impl DesktopFrameSender {
     fn send_reserved_recording(&mut self, message: DesktopRecordingMessage) {
         let Some(sender) = &self.recording_sender else {
             self.release_recording_slot();
+
             return;
         };
+
         match sender.try_send(message) {
             Ok(()) => {}
             Err(TrySendError::Full(_)) => {
@@ -789,6 +831,7 @@ impl DesktopFrameSender {
             Err(TrySendError::Disconnected(_)) => {
                 self.release_recording_slot();
                 self.recording_sender = None;
+
                 if self
                     .recording_active
                     .as_ref()
@@ -806,6 +849,7 @@ impl DesktopFrameSender {
         let should_log = self.recording_last_overload_log.is_none_or(|last| {
             now.saturating_duration_since(last) >= RECORDING_OVERLOAD_LOG_INTERVAL
         });
+
         if should_log {
             log::warn!(channel = self.channel_id; "Desktop recording encoder is behind; dropped {} recording frame(s) without blocking playback", self.recording_dropped_messages);
             self.recording_dropped_messages = 0;
@@ -821,6 +865,7 @@ fn take_audio_buffer(pool: &Mutex<Vec<Vec<f32>>>, capacity: usize) -> Vec<f32> {
         .pop()
         .unwrap_or_default();
     samples.clear();
+
     if samples.capacity() < capacity {
         samples.reserve(capacity - samples.capacity());
     }
@@ -829,11 +874,13 @@ fn take_audio_buffer(pool: &Mutex<Vec<Vec<f32>>>, capacity: usize) -> Vec<f32> {
 
 fn return_audio_buffer(pool: &Mutex<Vec<Vec<f32>>>, mut samples: Vec<f32>) {
     samples.clear();
+
     if samples.capacity() > AUDIO_BUFFER_MAX_RETAINED_CAPACITY {
         return;
     }
 
     let mut pool = pool.lock().unwrap_or_else(PoisonError::into_inner);
+
     if pool.len() < AUDIO_BUFFER_POOL_CAPACITY {
         pool.push(samples);
     }
@@ -908,11 +955,14 @@ impl DesktopRenderer {
         discontinuity_receiver: Receiver<DesktopDiscontinuity>,
     ) -> Result<()> {
         let mut clip_finished = false;
+
         loop {
             self.handle_events()?;
             self.apply_pending_window_aspect_constraint();
+
             if let Ok(discontinuity) = discontinuity_receiver.try_recv() {
                 self.apply_discontinuity(discontinuity);
+
                 return Ok(());
             }
 
@@ -925,6 +975,7 @@ impl DesktopRenderer {
 
             if let Ok(discontinuity) = discontinuity_receiver.try_recv() {
                 self.apply_discontinuity(discontinuity);
+
                 return Ok(());
             }
 
@@ -950,6 +1001,7 @@ impl DesktopRenderer {
         clip_finished: &mut bool,
     ) -> Result<(bool, bool)> {
         let mut received = false;
+
         loop {
             match receiver.try_recv() {
                 Ok(DesktopControlMessage::ClipStarted) => {
@@ -997,6 +1049,7 @@ impl DesktopRenderer {
 
     fn drain_audio_messages(&mut self, receiver: &Receiver<DesktopAudioMessage>) -> (bool, bool) {
         let mut received = false;
+
         while self.pending_audio_samples < self.max_pending_samples() {
             match receiver.try_recv() {
                 Ok(message) => {
@@ -1019,6 +1072,7 @@ impl DesktopRenderer {
 
     fn drain_video_messages(&mut self, receiver: &Receiver<DesktopVideoMessage>) -> (bool, bool) {
         let mut received = false;
+
         while self.video_queue.len() < VIDEO_CHANNEL_CAPACITY {
             match receiver.try_recv() {
                 Ok(DesktopVideoMessage {
@@ -1108,6 +1162,7 @@ impl DesktopRenderer {
                     self.submitted_audio_samples.saturating_add(samples as u64);
                 continue;
             }
+
             match self.pending_audio.pop_front() {
                 Some(DesktopAudioMessage::Samples {
                     samples,
@@ -1130,6 +1185,7 @@ impl DesktopRenderer {
             }
         }
         self.start_audio_if_ready(false);
+
         Ok(())
     }
 
@@ -1152,6 +1208,7 @@ impl DesktopRenderer {
             split_audio_padding(self.submitted_audio_samples, virtual_position, samples);
         self.submitted_audio_samples = self.submitted_audio_samples.saturating_add(covered);
         self.pending_silence_samples = self.pending_silence_samples.saturating_add(remaining);
+
         if covered > 0 {
             self.audio_clock.reset_at(
                 self.submitted_audio_samples.saturating_sub(queued),
@@ -1162,6 +1219,7 @@ impl DesktopRenderer {
 
     fn start_audio_if_ready(&mut self, force: bool) {
         let video_ready = video_prebuffer_ready(self.video_queue.len(), self.video_decoded, force);
+
         if !self.audio_started
             && video_ready
             && (force || self.queued_audio_samples() >= self.prebuffer_samples())
@@ -1209,8 +1267,10 @@ impl DesktopRenderer {
                 "dropped {dropped_frames} late desktop video frame(s) at audio sample {audio_pts}"
             );
         }
+
         let video_time_base = self.video_time_base;
         let sample_rate = self.sample_rate;
+
         if let Some(frame) = self.video_queue.pop_front_if(|frame| {
             let frame_pts = frame.pts().unwrap_or_default().max(0);
             video_pts_in_audio_samples(frame_pts, video_time_base, sample_rate) <= audio_pts
@@ -1235,11 +1295,13 @@ impl DesktopRenderer {
             .video_end_pts
             .is_some_and(|video_end_pts| expected_video_pts >= video_end_pts);
         let now = Instant::now();
+
         if starved && !self.video_finished && !reached_video_end {
             // A decoder is intentionally interrupted during shutdown. Wait
             // for a sustained underflow before reporting it, so the final
             // scheduler tick before a window closes is not noisy.
             let starvation_started = self.last_starvation_report.get_or_insert(now);
+
             if now.duration_since(*starvation_started) >= Duration::from_secs(1) {
                 log::debug!(
                     channel = self.channel_id;
@@ -1261,6 +1323,7 @@ impl DesktopRenderer {
             self.refresh_window();
             self.last_rendered_video_pts = Some(expected_video_pts);
         }
+
         Ok(())
     }
 
@@ -1272,9 +1335,11 @@ impl DesktopRenderer {
 
     fn render_video_frame(&mut self, frame: &frame::Video) -> Result<()> {
         let now = Instant::now();
+
         if let Some(last_present) = self.last_video_present {
             let interval = now.duration_since(last_present);
             let frame_duration = Duration::from_secs_f64(f64::from(self.video_time_base));
+
             if interval < frame_duration.mul_f64(0.5) || interval > frame_duration.mul_f64(1.5) {
                 log::trace!(
                     channel = self.channel_id;
@@ -1284,11 +1349,13 @@ impl DesktopRenderer {
                 );
             }
         }
+
         self.last_video_present = Some(now);
 
         benchmark::measure_success(Stage::DesktopConvert, || {
             self.last_video = Some(self.frame_converter.convert(frame)?);
             self.refresh_window();
+
             Ok(())
         })
     }
@@ -1327,6 +1394,7 @@ impl DesktopRenderer {
         if !thread::is_running() {
             pump_desktop_window_events();
         }
+
         let actions = self.window().take_actions();
         let mut refresh = self
             .volume_overlay_until
@@ -1347,6 +1415,7 @@ impl DesktopRenderer {
                         self.help_bitmap = None;
                         refresh = true;
                     }
+
                     if !self.window().fullscreen() && width > 0 && height > 0 {
                         self.pending_aspect_resize = Some((width, height, Instant::now()));
                     }
@@ -1389,6 +1458,7 @@ impl DesktopRenderer {
         if refresh {
             self.refresh_window();
         }
+
         Ok(())
     }
 
@@ -1396,6 +1466,7 @@ impl DesktopRenderer {
         let Some((width, height, at)) = self.pending_aspect_resize else {
             return;
         };
+
         if Instant::now().duration_since(at) < WINDOW_ASPECT_SETTLE {
             return;
         }
@@ -1416,6 +1487,7 @@ impl DesktopRenderer {
             )
         };
         self.last_window_size = target;
+
         if target != (width, height) {
             self.window().request_size(target.0, target.1);
         }
@@ -1449,6 +1521,7 @@ impl DesktopRenderer {
         if !self.help_visible {
             return None;
         }
+
         if self.help_bitmap.is_none() {
             let (size, large) = self.window().size_and_large_subtitles();
             self.help_bitmap = create_help_bitmap(size.0, large)
@@ -1462,6 +1535,7 @@ impl DesktopRenderer {
     fn subtitle_for_current_frame(&mut self) -> Option<RgbaBitmap> {
         let video_pts = self.last_video.as_ref()?.pts;
         let text = self.active_subtitle_for_pts(video_pts);
+
         if self.active_subtitle_text.as_deref() != text.as_deref() {
             self.active_subtitle_text = text.clone();
             self.subtitle_bitmap = text.and_then(|text| {
@@ -1479,6 +1553,7 @@ impl DesktopRenderer {
         if !self.subtitles_enabled {
             return None;
         }
+
         let ms = video_pts.saturating_mul(1_000) / i64::from(self.fps);
         self.subtitles
             .iter()
@@ -1566,8 +1641,10 @@ fn prepare_desktop_window_on_current_thread(
 ) -> Result<DesktopWindowHandle> {
     DESKTOP_WINDOW.with(|window| {
         let mut window = window.borrow_mut();
+
         if let Some(window) = window.as_mut() {
             window.reconfigure(width, height, fullscreen, channel_id)?;
+
             Ok(window.handle())
         } else {
             *window = Some(DesktopWindow::open(width, height, fullscreen, channel_id)?);
@@ -1610,6 +1687,7 @@ fn close_desktop_window(handle: DesktopWindowHandle) {
         // thread together with Winit and WGPU state.
         drop(handle);
     };
+
     if thread::is_running() {
         // Renderer teardown can originate from the playout worker while the
         // host thread is still dispatching window events. Queue the teardown,
@@ -1693,6 +1771,7 @@ fn create_desktop_window_app(
         channel_id,
     };
     app.window.set_visible(true);
+
     Ok(app)
 }
 
@@ -1707,6 +1786,7 @@ impl DesktopWindow {
             app: None,
         };
         window.create_app(width, height, fullscreen, channel_id)?;
+
         Ok(window)
     }
 
@@ -1724,6 +1804,7 @@ impl DesktopWindow {
             channel_id,
             result: None,
         };
+
         for _ in 0..3 {
             let _ = self
                 .event_loop
@@ -1732,11 +1813,13 @@ impl DesktopWindow {
                 break;
             }
         }
+
         let app = creator
             .result
             .context("desktop event loop did not create a window")??;
         app.window.request_redraw();
         self.app = Some(app);
+
         Ok(())
     }
 
@@ -1750,6 +1833,7 @@ impl DesktopWindow {
         if self.app.is_none() {
             return self.create_app(width, height, fullscreen, channel_id);
         }
+
         let app = self
             .app
             .as_mut()
@@ -1762,6 +1846,7 @@ impl DesktopWindow {
             shared.maximized = false;
             shared.requested_size = None;
         }
+
         app.occluded = false;
         app.channel_id = channel_id;
         app.renderer.set_channel_id(channel_id);
@@ -1787,6 +1872,7 @@ impl DesktopWindow {
         }
         app.window.set_visible(true);
         app.window.request_redraw();
+
         Ok(())
     }
 
@@ -1833,7 +1919,7 @@ impl DesktopWindow {
 impl DesktopWindowHandle {
     fn take_actions(&self) -> Vec<WindowAction> {
         let mut shared = self.shared.lock().unwrap_or_else(PoisonError::into_inner);
-        std::mem::take(&mut shared.actions)
+        mem::take(&mut shared.actions)
     }
 
     fn set_frame(&self, frame: WindowFrame) {
@@ -1976,6 +2062,7 @@ impl ApplicationHandler for DesktopWindowApp {
             }
             WindowEvent::Occluded(occluded) => {
                 self.occluded = occluded;
+
                 if !occluded {
                     self.window.request_redraw();
                 }
@@ -2032,6 +2119,7 @@ impl ApplicationHandler for DesktopWindowApp {
                 ..
             } => {
                 let now = Instant::now();
+
                 if self.last_primary_click.is_some_and(|last_click| {
                     now.duration_since(last_click) <= DESKTOP_DOUBLE_CLICK_INTERVAL
                 }) {
@@ -2174,6 +2262,7 @@ mod tests {
                         .map(|frame| {
                             assert_eq!(frame.pts(), Some(expected_pts));
                             expected_pts += frame.samples() as i64;
+
                             for channel in 0..2 {
                                 assert!(
                                     frame
@@ -2211,6 +2300,7 @@ mod tests {
         })
         .unwrap();
         let mut played = Vec::new();
+
         for _ in 0..10 {
             renderer.drain_audio_messages(&rx);
             renderer.flush_pending_audio().unwrap();

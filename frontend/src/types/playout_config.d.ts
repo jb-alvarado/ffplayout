@@ -18,15 +18,15 @@ export type Output = { id: number, mode: OutputMode, stream_url: string, stream_
 /**
  * FFmpeg AVIO/protocol options used while opening a network stream.
  */
-protocol_options: { [key in string]: string },
+protocol_options: { [key in string]: string }, 
 /**
  * FFmpeg muxer options for this output, such as HLS `hls_flags`.
  */
-muxer_options: { [key in string]: string },
+muxer_options: { [key in string]: string }, 
 /**
  * Global container metadata. Availability depends on the output muxer.
  */
-metadata_options: { [key in string]: string }, audio_codec: string,
+metadata_options: { [key in string]: string }, audio_codec: string, 
 /**
  * FFmpeg AVOptions for the selected audio encoder.
  */

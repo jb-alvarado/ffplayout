@@ -29,6 +29,7 @@ impl GainEffect {
 
     fn next_gain(&mut self) -> f32 {
         let requested = self.control.volume_f32();
+
         if requested != self.target {
             self.target = requested;
             self.remaining_samples = self.ramp_samples;
@@ -40,6 +41,7 @@ impl GainEffect {
 
         self.current += (self.target - self.current) / self.remaining_samples as f32;
         self.remaining_samples -= 1;
+
         if self.remaining_samples == 0 {
             self.current = self.target;
         }
@@ -54,6 +56,7 @@ impl AudioEffect for GainEffect {
 
         if !ramping {
             let gain = self.current;
+
             for plane in 0..frame.planes() {
                 for sample in frame.plane_mut::<f32>(plane) {
                     *sample = if sample.is_finite() {
@@ -63,6 +66,7 @@ impl AudioEffect for GainEffect {
                     };
                 }
             }
+
             return;
         }
 
@@ -73,6 +77,7 @@ impl AudioEffect for GainEffect {
             let gain = self.next_gain();
             self.gain_buffer.push(gain);
         }
+
         for plane in 0..frame.planes() {
             for (sample, gain) in frame
                 .plane_mut::<f32>(plane)
@@ -114,6 +119,7 @@ mod tests {
     #[test]
     fn rejects_invalid_volume() {
         let control = AudioEffectsControl::default();
+
         for volume in [-0.1, 3.1, f64::NAN, f64::INFINITY] {
             assert!(control.set_volume(volume).is_err());
         }
