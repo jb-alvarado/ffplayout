@@ -40,6 +40,8 @@ const newProtocolOptionName = ref('')
 const newProtocolOptionValue = ref('')
 const newMuxerOptionName = ref('')
 const newMuxerOptionValue = ref('')
+const newMetadataKey = ref('')
+const newMetadataValue = ref('')
 const newAudioOptionName = ref('')
 const newAudioOptionValue = ref('')
 
@@ -83,6 +85,8 @@ const outputId = computed({
 
         newMuxerOptionName.value = ''
         newMuxerOptionValue.value = ''
+        newMetadataKey.value = ''
+        newMetadataValue.value = ''
         newProtocolOptionName.value = ''
         newProtocolOptionValue.value = ''
         newAudioOptionName.value = ''
@@ -115,6 +119,11 @@ const outputId = computed({
             configStore.playout.output.muxer_options = JSON.parse(selected.muxer_options || '{}')
         } catch {
             configStore.playout.output.muxer_options = {}
+        }
+        try {
+            configStore.playout.output.metadata_options = JSON.parse(selected.metadata_options || '{}')
+        } catch {
+            configStore.playout.output.metadata_options = {}
         }
         configStore.playout.output.audio_codec = selected.audio_codec ?? 'aac'
         try {
@@ -324,6 +333,43 @@ function removeMuxerOption(key: string) {
     const options = { ...configStore.playout.output.muxer_options }
     delete options[key]
     configStore.playout.output.muxer_options = options
+}
+
+function addMetadata() {
+    const metadata = configStore.playout.output.metadata_options
+    const key = newMetadataKey.value.trim()
+    const value = newMetadataValue.value.trim()
+    if (!key || !value || Object.hasOwn(metadata, key)) return
+    configStore.playout.output.metadata_options = { ...metadata, [key]: value }
+    newMetadataKey.value = ''
+    newMetadataValue.value = ''
+}
+
+function renameMetadata(previousKey: string, event: Event) {
+    const input = event.target as HTMLInputElement
+    const key = input.value.trim()
+    const metadata = { ...configStore.playout.output.metadata_options }
+    if (!key || (key !== previousKey && Object.hasOwn(metadata, key))) {
+        input.value = previousKey
+        return
+    }
+    const value = metadata[previousKey]
+    delete metadata[previousKey]
+    metadata[key] = value
+    configStore.playout.output.metadata_options = metadata
+}
+
+function setMetadata(key: string, value: string) {
+    configStore.playout.output.metadata_options = {
+        ...configStore.playout.output.metadata_options,
+        [key]: value,
+    }
+}
+
+function removeMetadata(key: string) {
+    const metadata = { ...configStore.playout.output.metadata_options }
+    delete metadata[key]
+    configStore.playout.output.metadata_options = metadata
 }
 
 function eventValue(event: Event): string {
@@ -941,7 +987,9 @@ async function onSubmitPlayout() {
 
                 <div
                     class=""
-                    :class="{ 'collapse collapse-plus bg-base-100/40 border-2 border-base-100 my-4': output !== 'desktop' }"
+                    :class="{
+                        'collapse collapse-plus bg-base-100/40 border-2 border-base-100 my-4': output !== 'desktop',
+                    }"
                 >
                     <input
                         v-if="output !== 'desktop'"
@@ -949,6 +997,7 @@ async function onSubmitPlayout() {
                         :checked="
                             Object.keys(configStore.playout.output.audio_options).length !== 0 ||
                             Object.keys(configStore.playout.output.muxer_options).length !== 0 ||
+                            Object.keys(configStore.playout.output.metadata_options).length !== 0 ||
                             Object.keys(configStore.playout.output.protocol_options).length !== 0
                         "
                     />
@@ -1058,6 +1107,61 @@ async function onSubmitPlayout() {
                                     @click="addMuxerOption"
                                 >
                                     {{ t('config.addMuxerOption') }}
+                                </button>
+                            </div>
+                        </fieldset>
+
+                        <fieldset v-if="output === 'hls' || output === 'stream'" class="fieldset">
+                            <legend class="fieldset-legend">{{ t('config.outputMetadata') }}</legend>
+                            <p class="fieldset-label items-baseline mb-2">{{ t('config.outputMetadataHelp') }}</p>
+                            <div
+                                v-for="[key, value] in Object.entries(configStore.playout.output.metadata_options)"
+                                :key="key"
+                                class="flex flex-wrap items-center gap-2 mb-2"
+                            >
+                                <input
+                                    :value="key"
+                                    type="text"
+                                    class="input input-sm w-48"
+                                    @change="renameMetadata(key, $event)"
+                                />
+                                <input
+                                    :value="value"
+                                    type="text"
+                                    class="input input-sm grow"
+                                    @input="setMetadata(key, eventValue($event))"
+                                />
+                                <button class="btn btn-sm btn-ghost" type="button" @click="removeMetadata(key)">
+                                    {{ t('config.remove') }}
+                                </button>
+                            </div>
+                            <div class="flex flex-wrap items-center gap-2">
+                                <input
+                                    v-model="newMetadataKey"
+                                    type="text"
+                                    class="input input-sm w-48"
+                                    :placeholder="t('config.metadataKey')"
+                                />
+                                <input
+                                    v-model="newMetadataValue"
+                                    type="text"
+                                    class="input input-sm grow"
+                                    :placeholder="t('config.metadataValue')"
+                                />
+                                <button
+                                    class="btn btn-sm"
+                                    type="button"
+                                    :disabled="
+                                        !newMetadataKey.trim() ||
+                                        !newMetadataValue.trim() ||
+                                        Object.hasOwn(
+                                            configStore.playout.output.metadata_options,
+                                            newMetadataKey.trim(),
+                                        )
+                                    "
+                                    @click="addMetadata"
+                                >
+                                    {{ t('config.addMetadata') }}
                                 </button>
                             </div>
                         </fieldset>

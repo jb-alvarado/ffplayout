@@ -300,6 +300,12 @@ export default {
         addMuxerOption: 'Добавить параметр мультиплексора',
         muxerOptionName: 'Имя параметра',
         muxerOptionValue: 'Значение',
+        outputMetadata: 'Метаданные выхода',
+        outputMetadataHelp:
+            'Глобальные теги контейнера, например title, copyright, service_name и service_provider. Поддержка зависит от формата выхода.',
+        metadataKey: 'Ключ метаданных',
+        metadataValue: 'Значение',
+        addMetadata: 'Добавить метаданные',
         videoPreset: 'Предустановка видео',
         rateControl: 'Управление битрейтом',
         videoQuality: 'Качество CRF',

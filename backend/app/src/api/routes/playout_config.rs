@@ -319,6 +319,8 @@ pub async fn update_playout_config(
         .map_err(|error| ServiceError::BadRequest(error.to_string()))?;
     let muxer_options = serde_json::to_string(&data.output.muxer_options)
         .map_err(|error| ServiceError::BadRequest(error.to_string()))?;
+    let metadata_options = serde_json::to_string(&data.output.metadata_options)
+        .map_err(|error| ServiceError::BadRequest(error.to_string()))?;
     let audio_options = serde_json::to_string(&data.output.audio_options)
         .map_err(|error| ServiceError::BadRequest(error.to_string()))?;
     let mut transaction = state.pool.begin().await?;
@@ -357,6 +359,11 @@ pub async fn update_playout_config(
         },
         if is_encoded {
             muxer_options.as_str()
+        } else {
+            "{}"
+        },
+        if is_encoded {
+            metadata_options.as_str()
         } else {
             "{}"
         },
@@ -517,5 +524,12 @@ mod tests {
             .protocol_options
             .insert("latency".to_string(), "2000000".to_string());
         assert!(requires_playout_restart(&current, &protocol_update));
+
+        let mut metadata_update = current.clone();
+        metadata_update
+            .output
+            .metadata_options
+            .insert("title".to_string(), "Example Program".to_string());
+        assert!(requires_playout_restart(&current, &metadata_update));
     }
 }

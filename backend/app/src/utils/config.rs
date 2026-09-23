@@ -873,6 +873,9 @@ pub struct Output {
     /// FFmpeg muxer options for this output, such as HLS `hls_flags`.
     #[serde(default)]
     pub muxer_options: BTreeMap<String, String>,
+    /// Global container metadata. Availability depends on the output muxer.
+    #[serde(default)]
+    pub metadata_options: BTreeMap<String, String>,
     #[serde(default = "default_audio_codec")]
     pub audio_codec: String,
     /// FFmpeg AVOptions for the selected audio encoder.
@@ -925,6 +928,7 @@ impl Output {
             .unwrap_or_else(|_| ff_engine::video_option_defaults(&video_codec));
         let protocol_options = serde_json::from_str(&output.protocol_options).unwrap_or_default();
         let muxer_options = serde_json::from_str(&output.muxer_options).unwrap_or_default();
+        let metadata_options = serde_json::from_str(&output.metadata_options).unwrap_or_default();
         let audio_options = serde_json::from_str(&output.audio_options).unwrap_or_default();
 
         Self {
@@ -957,6 +961,7 @@ impl Output {
             video_options,
             protocol_options,
             muxer_options,
+            metadata_options,
             audio_codec: output.audio_codec.unwrap_or_else(default_audio_codec),
             audio_options,
             audio_bitrate: output
@@ -1045,6 +1050,10 @@ impl Output {
             return Err(
                 "protocol options can only be used with network stream outputs".to_string(),
             );
+        }
+        ff_engine::validate_output_metadata(&self.metadata_options)?;
+        if self.mode == OutputMode::Desktop && !self.metadata_options.is_empty() {
+            return Err("container metadata is unavailable for desktop output".to_string());
         }
 
         if matches!(self.mode, OutputMode::HLS | OutputMode::Stream) {
@@ -1414,6 +1423,7 @@ mod output_tests {
             video_options: ff_engine::video_option_defaults("libx264"),
             protocol_options: BTreeMap::new(),
             muxer_options: BTreeMap::new(),
+            metadata_options: BTreeMap::new(),
             audio_codec: "aac".to_string(),
             audio_options: BTreeMap::new(),
             audio_bitrate: 128,
@@ -1425,6 +1435,21 @@ mod output_tests {
     fn validates_structured_output_settings() {
         assert!(output(OutputMode::HLS).validate().is_ok());
         assert!(output(OutputMode::Stream).validate().is_ok());
+    }
+
+    #[test]
+    fn output_metadata_roundtrips_and_is_rejected_for_desktop() {
+        let mut output = output(OutputMode::Stream);
+        output
+            .metadata_options
+            .insert("copyright".into(), "© Example".into());
+        assert!(output.validate().is_ok());
+        let decoded: Output =
+            serde_json::from_value(serde_json::to_value(&output).unwrap()).unwrap();
+        assert_eq!(decoded.metadata_options, output.metadata_options);
+
+        output.mode = OutputMode::Desktop;
+        assert!(output.validate().unwrap_err().contains("desktop"));
     }
 
     #[test]

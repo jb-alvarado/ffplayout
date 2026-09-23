@@ -304,6 +304,12 @@ export default {
         addMuxerOption: 'Muxer-Option hinzufügen',
         muxerOptionName: 'Optionsname',
         muxerOptionValue: 'Wert',
+        outputMetadata: 'Ausgabe-Metadaten',
+        outputMetadataHelp:
+            'Globale Container-Tags wie title, copyright, service_name und service_provider. Welche Tags erhalten bleiben, hängt vom Ausgabeformat ab.',
+        metadataKey: 'Metadaten-Schlüssel',
+        metadataValue: 'Wert',
+        addMetadata: 'Metadatum hinzufügen',
         videoPreset: 'Video-Preset',
         rateControl: 'Bitratensteuerung',
         videoQuality: 'CRF-Qualität',

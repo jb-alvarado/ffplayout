@@ -22,7 +22,11 @@ protocol_options: { [key in string]: string },
 /**
  * FFmpeg muxer options for this output, such as HLS `hls_flags`.
  */
-muxer_options: { [key in string]: string }, audio_codec: string, 
+muxer_options: { [key in string]: string },
+/**
+ * Global container metadata. Availability depends on the output muxer.
+ */
+metadata_options: { [key in string]: string }, audio_codec: string,
 /**
  * FFmpeg AVOptions for the selected audio encoder.
  */

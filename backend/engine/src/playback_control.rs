@@ -51,17 +51,22 @@ impl PlaybackControl {
         if self.is_shutdown() {
             return Err(NavigationBlocked::Busy);
         }
+
         let mut state = self
             .navigation
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+
         if state.live_active {
             return Err(NavigationBlocked::Live);
         }
+
         if state.reserved {
             return Err(NavigationBlocked::Busy);
         }
+
         state.reserved = true;
+
         Ok(PlaylistNavigation {
             control: self.clone(),
         })

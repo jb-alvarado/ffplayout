@@ -31,7 +31,8 @@ use crate::{
     utils::{
         config::{
             HlsSubtitle, HlsVariant, OutputConfig, audio_encoder_context,
-            engine_audio_sample_format, validate_output_protocol_options, video_codec_uses_bitrate,
+            engine_audio_sample_format, validate_output_metadata, validate_output_protocol_options,
+            video_codec_uses_bitrate,
         },
         ffmpeg_capabilities::validate_muxer_options,
         helper::{is_network_url, open_network_output},
@@ -210,6 +211,7 @@ impl EncodedOutput {
         let input_height = cfg.height;
         let mut recording_cfg = cfg.clone();
         recording_cfg.protocol_options.clear();
+        recording_cfg.metadata_options.clear();
         recording_cfg.width = encode.width.max(1);
         recording_cfg.height = encode.height.max(1);
         recording_cfg.video_codec = encode.video_codec.clone();
@@ -251,6 +253,7 @@ impl EncodedOutput {
         output_format: EncodedFormat,
         hls_health: Option<HlsHealth>,
     ) -> Result<Self> {
+        validate_output_metadata(&cfg.metadata_options).map_err(anyhow::Error::msg)?;
         match &output_format {
             EncodedFormat::Hls { .. } => {
                 validate_muxer_options("hls", &cfg.muxer_options).map_err(anyhow::Error::msg)?;
@@ -377,6 +380,15 @@ impl EncodedOutput {
             }
             EncodedFormat::Auto => format::output(path)?,
         };
+        if !cfg.metadata_options.is_empty()
+            && !matches!(output_format, EncodedFormat::Recording { .. })
+        {
+            let mut metadata = ffmpeg::Dictionary::new();
+            for (key, value) in &cfg.metadata_options {
+                metadata.set(key, value);
+            }
+            octx.set_metadata(metadata);
+        }
         // Matroska stores codec initialization data in its header. Keep it on
         // the shared encoders when a packet-copy recording is active; FFmpeg's
         // stream muxers accept those headers as well. An encode-mode recording
@@ -1435,6 +1447,119 @@ mod open_tests {
         ffmpeg_capabilities::ffmpeg_capabilities,
     };
     use std::fs;
+    use std::process::Command;
+
+    #[test]
+    fn mpegts_writes_dvb_service_metadata() {
+        ffmpeg::init().ok();
+        let path =
+            std::env::temp_dir().join(format!("ffplayout_metadata_{}.ts", std::process::id()));
+        let cfg = OutputConfig::new(320, 240, 25, 44_100).with_metadata_options(BTreeMap::from([
+            ("service_name".to_string(), "Example Channel".to_string()),
+            (
+                "service_provider".to_string(),
+                "Example Provider".to_string(),
+            ),
+        ]));
+        let mut output = EncodedOutput::open(
+            path.to_str().unwrap(),
+            &cfg,
+            EncodedFormat::Stream {
+                muxer: "mpegts".to_string(),
+            },
+        )
+        .unwrap();
+        for index in 0..25 {
+            let mut video = frame::Video::new(Pixel::YUV420P, 320, 240);
+            video.set_pts(Some(index));
+            video.data_mut(0).fill(16);
+            video.data_mut(1).fill(128);
+            video.data_mut(2).fill(128);
+            output.encode_video(&video).unwrap();
+        }
+        output.finish().unwrap();
+
+        let probe = Command::new("ffprobe")
+            .args([
+                "-v",
+                "error",
+                "-show_programs",
+                "-of",
+                "default=noprint_wrappers=1",
+            ])
+            .arg(&path)
+            .output()
+            .expect("ffprobe is required for FFmpeg integration tests");
+        fs::remove_file(&path).ok();
+        assert!(
+            probe.status.success(),
+            "{}",
+            String::from_utf8_lossy(&probe.stderr)
+        );
+        let programs = String::from_utf8(probe.stdout).unwrap();
+        assert!(
+            programs.contains("TAG:service_name=Example Channel"),
+            "{programs}"
+        );
+        assert!(
+            programs.contains("TAG:service_provider=Example Provider"),
+            "{programs}"
+        );
+    }
+
+    #[test]
+    fn matroska_writes_generic_container_metadata() {
+        ffmpeg::init().ok();
+        let path = std::env::temp_dir().join(format!(
+            "ffplayout_generic_metadata_{}.mkv",
+            std::process::id()
+        ));
+        let cfg = OutputConfig::new(320, 240, 25, 44_100).with_metadata_options(BTreeMap::from([
+            ("title".to_string(), "Example Program".to_string()),
+            ("copyright".to_string(), "Example Copyright".to_string()),
+        ]));
+        let mut output = EncodedOutput::open(
+            path.to_str().unwrap(),
+            &cfg,
+            EncodedFormat::Stream {
+                muxer: "matroska".to_string(),
+            },
+        )
+        .unwrap();
+        for index in 0..25 {
+            let mut video = frame::Video::new(Pixel::YUV420P, 320, 240);
+            video.set_pts(Some(index));
+            video.data_mut(0).fill(16);
+            video.data_mut(1).fill(128);
+            video.data_mut(2).fill(128);
+            output.encode_video(&video).unwrap();
+        }
+        output.finish().unwrap();
+
+        let probe = Command::new("ffprobe")
+            .args([
+                "-v",
+                "error",
+                "-show_format",
+                "-of",
+                "default=noprint_wrappers=1",
+            ])
+            .arg(&path)
+            .output()
+            .expect("ffprobe is required for FFmpeg integration tests");
+        fs::remove_file(&path).ok();
+        assert!(
+            probe.status.success(),
+            "{}",
+            String::from_utf8_lossy(&probe.stderr)
+        );
+        let format = String::from_utf8(probe.stdout).unwrap();
+        assert!(format.contains("TAG:title=Example Program"), "{format}");
+        assert!(
+            format.contains("TAG:COPYRIGHT=Example Copyright"),
+            "{format}"
+        );
+    }
 
     #[test]
     fn configured_hls_flags_are_combined_with_required_flags() {

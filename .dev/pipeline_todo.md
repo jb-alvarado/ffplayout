@@ -1,7 +1,7 @@
 # Pipeline implementation backlog
 
-This backlog covers the configuration storage prepared by migration 4
-(`00004_pipeline_options.sql`). The migration intentionally only creates safe
+This backlog covers the configuration storage prepared by migration 4 and 5
+(`00004_pipeline_options.sql` and `00005_pipeline_metadata.sql`). The migration intentionally only creates safe
 defaults; none of the options below are active until its work package is
 implemented and tested.
 
@@ -19,7 +19,7 @@ uses it.
 - Keep enforced operational settings, such as network timeouts and HLS segment
   management, under ffplayout's control.
 - Add database, API, engine, and UI tests as part of the same package.
-- Migration 4 is unstable only until the next release that contains it. After
+- Migration 5 is unstable only until the next release that contains it. After
   that release, add new migrations instead of editing it.
 
 ## 1. Source protocol and demuxer options
@@ -104,6 +104,29 @@ added as a separate hardening measure without changing the FFmpeg pipeline.
 
 **Acceptance criteria:** examples such as SRT latency and UDP packet size work;
 unsupported or unsafe settings are rejected without affecting a running output.
+
+## 3a. Output container metadata
+
+**Stored field:** `config_output.metadata_options` (JSON map in a new
+migration; do not add dedicated `service_name` or `service_provider` columns).
+
+Output metadata belongs to the FFmpeg output context, not to its muxer or
+protocol option dictionaries. MPEG-TS reads `service_name` and
+`service_provider` from this metadata to populate the DVB service description.
+
+- [x] Add a generic output metadata map to the database, API, engine config,
+  and advanced UI with translations.
+- [x] Validate metadata keys, values, and size before saving. Container-specific
+  tag support remains the responsibility of the selected FFmpeg muxer.
+- [x] Set output-context metadata before writing the muxer header. Do not pass
+  metadata through `muxer_options` or `protocol_options`.
+- [x] Verify the resulting MPEG-TS service metadata with a container-level
+  regression test; preserve FFmpeg defaults when the map is empty.
+
+**Acceptance criteria:** an SRT, UDP, or custom MPEG-TS stream can advertise a
+configured DVB service name and provider; other formats can receive arbitrary
+global tags where their muxer supports them. Invalid metadata is rejected and
+empty configuration keeps FFmpeg defaults.
 
 ## 4. Audio encoder options
 

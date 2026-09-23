@@ -302,6 +302,12 @@ export default {
         addMuxerOption: 'Add Muxer Option',
         muxerOptionName: 'Option name',
         muxerOptionValue: 'Value',
+        outputMetadata: 'Output metadata',
+        outputMetadataHelp:
+            'Global container tags such as title, copyright, service_name and service_provider. Supported tags depend on the output format; some formats may discard them.',
+        metadataKey: 'Metadata key',
+        metadataValue: 'Value',
+        addMetadata: 'Add metadata',
         videoCodec: 'Video codec',
         audioCodec: 'Audio codec',
         videoPreset: 'Video preset',

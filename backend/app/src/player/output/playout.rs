@@ -484,6 +484,7 @@ fn engine_output_config(
             )
             .with_protocol_options(config.output.protocol_options.clone())
             .with_muxer_options(config.output.muxer_options.clone())
+            .with_metadata_options(config.output.metadata_options.clone())
             .with_recording(recording),
     )
 }
