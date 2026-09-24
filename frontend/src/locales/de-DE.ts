@@ -253,7 +253,21 @@ export default {
         apply: 'Anwenden',
         volumeApplied: 'Lautstärke angewendet.',
         volumeApplyFailed: 'Lautstärke konnte nicht angewendet werden.',
-        ingestHelp: `Starte einen Server für einen Ingest-Stream. Dieser Stream wird den normalen Stream überschreiben, bis er beendet ist. Es gibt nur einen sehr einfachen Authentifizierungsmechanismus, der überprüft, ob der Streamname korrekt ist.`,
+        ingestHelp: `RTMP- und SRT-Listener können die Playlist übernehmen, sobald Video empfangen wird. Mehrere Listener können gleichzeitig warten; ein laufender Takeover wird nicht verdrängt. Listener desselben Protokolls benötigen unterschiedliche Ports.`,
+        liveListenerEnabled: 'Aktiviert',
+        liveListenerAdd: 'Listener hinzufügen',
+        liveListenerRemove: 'Entfernen',
+        liveListenerName: 'Name',
+        liveListenerBackend: 'Protokoll',
+        liveListenerUrl: 'Listen-URL',
+        liveListenerPriority: 'Priorität (0–100)',
+        liveListenerOptions: 'Protokolloptionen',
+        liveListenerOptionsHelp:
+            'FFmpeg-Protokolloptionen für diesen Listener. Für verschlüsseltes SRT passphrase und pbkeylen (16, 24 oder 32) hinzufügen. Geheimnisse werden in der authentifizierten Konfiguration unverändert gespeichert und zurückgegeben.',
+        liveDemuxerOptions: 'Demuxer-Optionen',
+        addDemuxerOption: 'Demuxer-Option hinzufügen',
+        liveDemuxerOptionsHelp:
+            'Optionale FFmpeg-Eingabeoptionen. Bei RTMP wählt format=live_flv ausdrücklich den Live-FLV-Demuxer; sonst erkennt FFmpeg das Format automatisch. Für SRT-MPEG-TS-Optionen format=mpegts setzen.',
         ingestCustomFilter:
             'Wende einen benutzerdefinierten Filter auf den Ingest-Stream auf dieselbe Weise wie im Abschnitt Verarbeitung an.',
         playlistHelp: 'Playlist-Verwaltung.',

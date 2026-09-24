@@ -250,7 +250,21 @@ export default {
         apply: 'Apply',
         volumeApplied: 'Volume applied.',
         volumeApplyFailed: 'Failed to apply volume.',
-        ingestHelp: `Run a server for an ingest stream. This stream will override the normal streaming until it is finished. There is only a very simple authentication mechanism, which checks if the stream name is correct.`,
+        ingestHelp: `RTMP and SRT listeners can take over the playlist when video arrives. Multiple listeners may wait at once; an active takeover is not pre-empted. Use a distinct port for each listener of the same protocol.`,
+        liveListenerEnabled: 'Enabled',
+        liveListenerAdd: 'Add listener',
+        liveListenerRemove: 'Remove',
+        liveListenerName: 'Name',
+        liveListenerBackend: 'Protocol',
+        liveListenerUrl: 'Listen URL',
+        liveListenerPriority: 'Priority (0–100)',
+        liveListenerOptions: 'Protocol options',
+        liveListenerOptionsHelp:
+            'FFmpeg protocol options for this listener. For encrypted SRT, add passphrase and pbkeylen (16, 24, or 32). Secrets are stored and returned unchanged in the authenticated configuration.',
+        liveDemuxerOptions: 'Demuxer options',
+        addDemuxerOption: 'Add demuxer option',
+        liveDemuxerOptionsHelp:
+            'Optional FFmpeg input options. For RTMP, format=live_flv explicitly selects the live FLV demuxer; otherwise FFmpeg detects the format automatically. For SRT MPEG-TS options, set format=mpegts.',
         ingestCustomFilter: 'Apply a custom filter to the Ingest stream in the same way as in the Processing section.',
         playlistHelp: 'Playlist handling.',
         playlistDayStart:

@@ -6,7 +6,7 @@ import timezone from 'dayjs/plugin/timezone.js'
 import utc from 'dayjs/plugin/utc.js'
 import mpegts from 'mpegts.js'
 
-import { ref, onMounted, onBeforeUnmount, watch, useTemplateRef } from 'vue'
+import { computed, ref, onMounted, onBeforeUnmount, watch, useTemplateRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { throttle } from 'es-toolkit/function'
 import { storeToRefs } from 'pinia'
@@ -73,6 +73,18 @@ const timeDiv = useTemplateRef('timeDiv')
 const { width } = useElementSize(timeDiv)
 
 const streamUrl = ref(`/data/event/${configStore.channels[configStore.i]?.id}?endpoint=playout&uuid=${authStore.uuid}`)
+
+const activeIngestLabel = computed(() => {
+    const id = playlistStore.ingestListenerId
+
+    if (id === null) return t('control.ingest')
+
+    const backend = playlistStore.ingestListenerBackend?.toUpperCase()
+    const name = playlistStore.ingestListenerName?.trim()
+    const details = name && backend ? `${name} (${backend} #${id})` : backend ? `${backend} #${id}` : `#${id}`
+
+    return `${t('control.ingest')}: ${details}`
+})
 
 type PlayerControlButton = {
     label: string
@@ -289,6 +301,9 @@ async function clock() {
 
 function resetStatus() {
     playlistStore.ingestRuns = false
+    playlistStore.ingestListenerId = null
+    playlistStore.ingestListenerName = null
+    playlistStore.ingestListenerBackend = null
     playlistStore.elapsedSec = 0
     playlistStore.shift = 0
     playlistStore.audioLevel = null
@@ -419,8 +434,12 @@ function runControl(button: PlayerControlButton) {
                 <div class="col-span-1 xs:col-span-2 p-1">
                     <div class="w-full h-full bg-base-100 rounded-sm flex items-center px-3 py-2 xl:py-1 shadow">
                         <div class="w-full h-full flex flex-col content-center">
-                            <div v-if="playlistStore.ingestRuns" class="h-1/4 font-bold truncate leading-5">
-                                {{ t('control.ingest') }}
+                            <div
+                                v-if="playlistStore.ingestRuns"
+                                class="h-1/4 font-bold truncate content-center leading-5"
+                                :title="activeIngestLabel"
+                            >
+                                {{ activeIngestLabel }}
                             </div>
                             <div
                                 v-else

@@ -1571,7 +1571,6 @@ impl VideoDecoder {
         )?;
         let runtime_text =
             RuntimeTextOverlay::new(label, cfg, start_pts, scroll_pts, "runtime text overlay")?;
-
         Ok(Self {
             decoder,
             scaler,
@@ -1890,7 +1889,6 @@ impl AudioDecoder {
             ChannelLayout::STEREO,
             cfg.sample_rate,
         )?;
-
         Ok(Self {
             audio_frame_callback: cfg.audio_frame_callback.clone(),
             decoder,

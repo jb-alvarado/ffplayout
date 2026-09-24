@@ -2,7 +2,7 @@ use std::{
     cmp, fmt,
     path::Path,
     sync::{
-        Arc, Mutex as StdMutex,
+        Arc, Mutex as StdMutex, PoisonError,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
 };
@@ -74,6 +74,7 @@ pub struct ChannelManager {
     pub id: i32,
     pub db_pool: Pool<Sqlite>,
     pub config: Arc<RwLock<PlayoutConfig>>,
+    running_config: Arc<StdMutex<Option<Arc<PlayoutConfig>>>>,
     pub channel: Arc<Mutex<Channel>>,
     pub decoder: Arc<Mutex<Option<Child>>>,
     pub encoder: Arc<Mutex<Option<Child>>>,
@@ -107,6 +108,24 @@ pub struct ChannelManager {
     pub playback_control: Arc<Mutex<PlaybackControl>>,
     pub shutdown: CancellationToken,
     pub system: SystemStat,
+}
+
+pub(crate) struct RunningConfigGuard {
+    slot: Arc<StdMutex<Option<Arc<PlayoutConfig>>>>,
+    config: Arc<PlayoutConfig>,
+}
+
+impl Drop for RunningConfigGuard {
+    fn drop(&mut self) {
+        let mut slot = self.slot.lock().unwrap_or_else(PoisonError::into_inner);
+
+        if slot
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, &self.config))
+        {
+            *slot = None;
+        }
+    }
 }
 
 impl ChannelManager {
@@ -143,6 +162,7 @@ impl ChannelManager {
             db_pool,
             is_alive: Arc::new(AtomicBool::new(false)),
             config: Arc::new(RwLock::new(config)),
+            running_config: Arc::new(StdMutex::new(None)),
             channel: Arc::new(Mutex::new(channel)),
             list_init: Arc::new(AtomicBool::new(true)),
             current_media: Arc::new(Mutex::new(None)),
@@ -209,6 +229,37 @@ impl ChannelManager {
     pub async fn update_config(&self, new_config: PlayoutConfig) {
         let mut config = self.config.write().await;
         *config = new_config;
+    }
+
+    pub(crate) fn track_running_config(&self, config: PlayoutConfig) -> RunningConfigGuard {
+        let config = Arc::new(config);
+        *self
+            .running_config
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(Arc::clone(&config));
+
+        RunningConfigGuard {
+            slot: Arc::clone(&self.running_config),
+            config,
+        }
+    }
+
+    pub(crate) fn running_config(&self) -> Option<Arc<PlayoutConfig>> {
+        self.running_config
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    pub(crate) fn running_listener_label(&self, id: i32) -> Option<(String, String)> {
+        self.running_config().and_then(|config| {
+            config
+                .ingest
+                .listeners
+                .iter()
+                .find(|input| input.id == id)
+                .map(|input| (input.name.clone(), input.backend.clone()))
+        })
     }
 
     pub async fn start(&self) -> Result<(), ServiceError> {

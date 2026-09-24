@@ -390,7 +390,10 @@ impl StreamType {
         }
     }
 }
-pub use super::protocol::validate_output_protocol_options;
+pub use super::protocol::{
+    validate_input_protocol_options, validate_live_demuxer_options,
+    validate_output_protocol_options,
+};
 
 pub type VideoOptions = BTreeMap<String, String>;
 pub type AudioOptions = BTreeMap<String, String>;

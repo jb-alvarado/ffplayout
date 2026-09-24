@@ -1,6 +1,5 @@
 {
   "name": "frontend",
-  "version": "2.5.0",
   "description": "Web UI for ffplayout",
   "private": true,
   "type": "module",

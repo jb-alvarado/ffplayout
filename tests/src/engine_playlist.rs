@@ -55,7 +55,7 @@ async fn prepare_config() -> (PlayoutConfig, ChannelManager) {
     config.general.skip_validation = true;
     config.mail.recipient = "".into();
     config.processing.mode = Playlist;
-    config.ingest.enable = false;
+    config.ingest.listeners.clear();
 
     let manager = ChannelManager::new(
         pool,

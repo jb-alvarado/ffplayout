@@ -31,7 +31,10 @@ pub use audio_mixer::{
     LiveLoudnessMetrics, LiveLoudnessProcessor,
 };
 use input::live::{LiveEnded, LiveOverrideOutput};
-pub use input::live::{LiveReceiver, spawn_rtmp_listener};
+pub use input::live::{
+    LiveInputBackend, LiveListenerConfig, LiveReceiver, live_protocol_available,
+    spawn_live_listeners, spawn_rtmp_listener,
+};
 #[cfg(all(feature = "desktop-base", feature = "tokio"))]
 pub use output::desktop::thread::run_on_main_thread as run_desktop_on_main_thread;
 pub use output::resolved_variant_playlist_path;
@@ -46,8 +49,9 @@ pub use utils::{
         RgbaColor, StreamType, TextBackgroundConfig, TextConfig, TextOverlayState, TextPosition,
         TextScroll, TextWeight, VideoOptionChoice, VideoOptionKind, VideoOptionSpec,
         VideoOptionVisibility, VideoOptions, audio_codec_uses_bitrate, validate_audio_options,
-        validate_output_metadata, validate_output_protocol_options, validate_video_options,
-        video_codec_uses_bitrate, video_option_defaults, video_option_specs,
+        validate_input_protocol_options, validate_live_demuxer_options, validate_output_metadata,
+        validate_output_protocol_options, validate_video_options, video_codec_uses_bitrate,
+        video_option_defaults, video_option_specs,
     },
     ffmpeg_capabilities::{
         FfmpegCapabilities, FfmpegCodec, FfmpegFeatureSet, FfmpegMediaType, FfmpegMuxer,
@@ -337,16 +341,24 @@ impl AsyncPlayout {
         result.await.context("playout worker stopped during play")?
     }
 
-    pub async fn start_rtmp_live(
+    pub async fn start_live_listeners(
         &self,
-        url: impl Into<String>,
+        inputs: Vec<LiveListenerConfig>,
         config: OutputConfig,
     ) -> Result<()> {
-        let url = url.into();
+        for input in &inputs {
+            if !live_protocol_available(input.backend) {
+                return Err(anyhow!(
+                    "FFmpeg input protocol {:?} is unavailable in this build",
+                    input.backend
+                ));
+            }
+        }
+
         let (response, result) = oneshot::channel();
         self.commands
-            .send(AsyncCommand::StartRtmpLive {
-                url,
+            .send(AsyncCommand::StartLiveListeners {
+                inputs,
                 config: Box::new(config),
                 response,
             })
@@ -354,7 +366,7 @@ impl AsyncPlayout {
 
         result
             .await
-            .context("playout worker stopped while starting RTMP live")?
+            .context("playout worker stopped while starting live listeners")?
     }
 
     pub async fn finish(mut self) -> Result<()> {
@@ -402,8 +414,8 @@ enum AsyncCommand {
         playout_rate: f64,
         response: oneshot::Sender<Result<ClipResult>>,
     },
-    StartRtmpLive {
-        url: String,
+    StartLiveListeners {
+        inputs: Vec<LiveListenerConfig>,
         config: Box<OutputConfig>,
         response: oneshot::Sender<Result<()>>,
     },
@@ -450,14 +462,15 @@ fn run_async_playout_worker(mut playout: Playout, commands: mpsc::Receiver<Async
                 // worker alive so that command can explicitly release the
                 // window and its WGPU resources before process shutdown.
             }
-            AsyncCommand::StartRtmpLive {
-                url,
+            AsyncCommand::StartLiveListeners {
+                inputs,
                 config,
                 response,
             } => {
-                let receiver = spawn_rtmp_listener(url, *config);
-                receiver.set_benchmark(benchmark::current());
-                live = Some(receiver);
+                live = (!inputs.is_empty()).then(|| spawn_live_listeners(inputs, *config));
+                if let Some(receiver) = live.as_ref() {
+                    receiver.set_benchmark(benchmark::current());
+                }
                 let _ = response.send(Ok(()));
             }
             AsyncCommand::Finish { response } => {

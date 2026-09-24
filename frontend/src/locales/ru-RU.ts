@@ -251,7 +251,21 @@ export default {
         apply: 'Применить',
         volumeApplied: 'Громкость применена.',
         volumeApplyFailed: 'Не удалось применить громкость.',
-        ingestHelp: `Run a server for an ingest stream. This stream will override the normal streaming until it is finished. There is only a very simple authentication mechanism, which checks if the stream name is correct.`,
+        ingestHelp: `Приёмники RTMP и SRT могут заменить плейлист при поступлении видео. Несколько приёмников могут ожидать одновременно; активная трансляция не прерывается. Для приёмников одного протокола используйте разные порты.`,
+        liveListenerEnabled: 'Включено',
+        liveListenerAdd: 'Добавить приёмник',
+        liveListenerRemove: 'Удалить',
+        liveListenerName: 'Имя',
+        liveListenerBackend: 'Протокол',
+        liveListenerUrl: 'Адрес прослушивания',
+        liveListenerPriority: 'Приоритет (0–100)',
+        liveListenerOptions: 'Параметры протокола',
+        liveListenerOptionsHelp:
+            'Параметры протокола FFmpeg для этого приёмника. Для шифрования SRT добавьте passphrase и pbkeylen (16, 24 или 32). Секреты сохраняются и возвращаются без изменений через авторизованный API конфигурации.',
+        liveDemuxerOptions: 'Параметры демультиплексора',
+        addDemuxerOption: 'Добавить параметр демультиплексора',
+        liveDemuxerOptionsHelp:
+            'Необязательные входные параметры FFmpeg. Для RTMP format=live_flv явно выбирает live FLV; иначе формат определяется автоматически. Для параметров MPEG-TS через SRT задайте format=mpegts.',
         ingestCustomFilter: 'Apply a custom filter to the Ingest stream in the same way as in the Processing section.',
         playlistHelp: 'Playlist handling.',
         playlistDayStart:

@@ -4,7 +4,9 @@ export type Audio = { volume: number, live_loudness_enable: boolean, live_loudne
 
 export type General = { stop_threshold: number, };
 
-export type Ingest = { enable: boolean, ingest_url: string, };
+export type Ingest = { listeners: Array<LiveInput>, };
+
+export type LiveInput = { id: number, priority: number, enabled: boolean, name: string, backend: string, identifier: string, options: { [key in string]: string }, demuxer_options: { [key in string]: string }, };
 
 export type Logging = { ffmpeg_level: string, ingest_level: string, detect_silence: boolean, ignore_lines: Array<string>, };
 

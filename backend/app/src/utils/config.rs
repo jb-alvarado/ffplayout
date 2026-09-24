@@ -9,7 +9,7 @@ use chrono::NaiveTime;
 use chrono_tz::Tz;
 use flexi_logger::Level;
 use serde::{Deserialize, Serialize};
-use sqlx::{Pool, Sqlite};
+use sqlx::{Pool, Row, Sqlite};
 use tokio::{fs, io::AsyncReadExt};
 use ts_rs::TS;
 
@@ -688,15 +688,50 @@ impl Audio {
 #[derive(Debug, Default, Clone, Deserialize, Serialize, TS)]
 #[ts(export, export_to = "playout_config.d.ts")]
 pub struct Ingest {
-    pub enable: bool,
-    pub ingest_url: String,
+    pub listeners: Vec<LiveInput>,
 }
 
-impl Ingest {
-    fn new(config: &models::Configuration) -> Self {
-        Self {
-            enable: config.ingest_enable,
-            ingest_url: config.ingest_url.clone(),
+#[derive(Debug, Default, Clone, PartialEq, Eq, Deserialize, Serialize, TS)]
+#[ts(export, export_to = "playout_config.d.ts")]
+pub struct LiveInput {
+    pub id: i32,
+    pub priority: i32,
+    pub enabled: bool,
+    pub name: String,
+    pub backend: String,
+    pub identifier: String,
+    pub options: BTreeMap<String, String>,
+    pub demuxer_options: BTreeMap<String, String>,
+}
+
+impl LiveInput {
+    pub fn listen_port(&self) -> Result<u16, String> {
+        match self.backend.as_str() {
+            "rtmp" => parse_rtmp_ingest_port(&self.identifier),
+            "srt" => {
+                let url = reqwest::Url::parse(&self.identifier)
+                    .map_err(|_| "invalid SRT listener URL".to_string())?;
+
+                if url.scheme() != "srt"
+                    || url.host_str().is_none()
+                    || !url.username().is_empty()
+                    || url.password().is_some()
+                    || url.query().is_some()
+                    || url.fragment().is_some()
+                    || !matches!(url.path(), "" | "/")
+                {
+                    return Err("SRT listener must use srt://host:port".to_string());
+                }
+
+                let port = url.port().ok_or("SRT listener must include a port")?;
+
+                if port < MIN_INGEST_PORT {
+                    return Err(format!("listener port must be at least {MIN_INGEST_PORT}"));
+                }
+
+                Ok(port)
+            }
+            _ => Err("unsupported live input backend".to_string()),
         }
     }
 }
@@ -1217,7 +1252,31 @@ impl PlayoutConfig {
         let logging = Logging::new(&config);
         let mut processing = Processing::new(&config);
         let audio = Audio::new(&config);
-        let ingest = Ingest::new(&config);
+        let listeners = sqlx::query(
+            "SELECT id, priority, enabled, name, backend, identifier, options, demuxer_options FROM config_live_input
+             WHERE config_id = $1 AND backend IN ('rtmp', 'srt') AND takeover_mode = 'connection'
+             ORDER BY priority DESC, id",
+        )
+        .bind(config.id)
+        .fetch_all(pool)
+        .await?
+        .into_iter()
+        .map(|row| {
+            let options: String = row.get("options");
+
+            Ok(LiveInput {
+                id: row.get("id"),
+                priority: row.get("priority"),
+                enabled: row.get("enabled"),
+                name: row.get("name"),
+                backend: row.get("backend"),
+                identifier: row.get("identifier"),
+                options: serde_json::from_str(&options)?,
+                demuxer_options: serde_json::from_str(&row.get::<String, _>("demuxer_options"))?,
+            })
+        })
+        .collect::<Result<Vec<_>, serde_json::Error>>()?;
+        let ingest = Ingest { listeners };
         let mut playlist = Playlist::new(&config);
         let text = Text::new(&config, text_preset);
         let task = Task::new(&config);
@@ -1711,7 +1770,46 @@ mod output_tests {
 
 #[cfg(test)]
 mod ingest_tests {
-    use super::{MIN_INGEST_PORT, parse_rtmp_ingest_port};
+    use super::{Ingest, LiveInput, MIN_INGEST_PORT, parse_rtmp_ingest_port};
+
+    #[test]
+    fn ingest_api_uses_only_the_listener_list() {
+        let json = serde_json::to_value(Ingest::default()).unwrap();
+
+        assert_eq!(json, serde_json::json!({ "listeners": [] }));
+        assert!(
+            serde_json::from_value::<Ingest>(serde_json::json!({
+                "enable": true,
+                "ingest_url": "rtmp://127.0.0.1:1936/live/stream"
+            }))
+            .is_err()
+        );
+    }
+
+    fn srt_input(url: &str) -> LiveInput {
+        LiveInput {
+            backend: "srt".to_string(),
+            identifier: url.to_string(),
+            ..LiveInput::default()
+        }
+    }
+
+    #[test]
+    fn validates_srt_listener_addresses_without_url_options() {
+        assert_eq!(srt_input("srt://127.0.0.1:9000").listen_port(), Ok(9000));
+        assert_eq!(srt_input("srt://[::1]:9001").listen_port(), Ok(9001));
+
+        for url in [
+            "srt://127.0.0.1:80",
+            "srt://127.0.0.1",
+            "srt://127.0.0.1:9000?mode=caller",
+            "srt://127.0.0.1:9000/live",
+            "srt://user@127.0.0.1:9000",
+            "http://127.0.0.1:9000",
+        ] {
+            assert!(srt_input(url).listen_port().is_err(), "accepted {url}");
+        }
+    }
 
     #[test]
     fn parses_unprivileged_rtmp_ingest_ports() {

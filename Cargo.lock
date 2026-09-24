@@ -1584,7 +1584,7 @@ dependencies = [
 
 [[package]]
 name = "ff-engine"
-version = "2.5.0"
+version = "2.6.0-alpha.1"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -1598,6 +1598,7 @@ dependencies = [
  "glob",
  "log",
  "naga",
+ "pkg-config",
  "pollster",
  "regex",
  "rten-simd",
@@ -1636,7 +1637,7 @@ dependencies = [
 
 [[package]]
 name = "ffplayout"
-version = "2.5.0"
+version = "2.6.0-alpha.1"
 dependencies = [
  "argon2",
  "async-walkdir",
@@ -5611,7 +5612,7 @@ dependencies = [
 
 [[package]]
 name = "tests"
-version = "2.5.0"
+version = "2.6.0-alpha.1"
 dependencies = [
  "axum",
  "chrono",
