@@ -865,7 +865,7 @@ async function onSubmitPlayout() {
                                     />
                                     <input
                                         :value="value"
-                                        :type="name === 'passphrase' ? 'password' : 'text'"
+                                        type="text"
                                         class="input input-sm grow"
                                         @input="listener.options[name] = eventValue($event)"
                                     />
@@ -886,7 +886,7 @@ async function onSubmitPlayout() {
                                     />
                                     <input
                                         v-model="newListenerOptionValues[index]"
-                                        :type="newListenerOptionNames[index] === 'passphrase' ? 'password' : 'text'"
+                                        type="text"
                                         class="input input-sm grow"
                                         :placeholder="t('config.protocolOptionValue')"
                                     />
