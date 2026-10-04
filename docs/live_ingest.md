@@ -65,6 +65,9 @@ delivery pauses but also delay recovery when a connected publisher stops sending
 
 #### Delayed tracks and resource limits
 
+For opt-in RTMP tests that measure resident memory across continuous streaming,
+publisher reconnects and watchdog restarts, see [Live-input memory tests](live_memory_tests.md).
+
 Live takeover starts with the first decoded video frame. Until then, the playlist
 continues and incoming audio is kept in a rolling buffer of at most ten seconds
 and 512 decoded frames. Older audio is discarded when either limit is reached;

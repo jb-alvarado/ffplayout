@@ -25,6 +25,9 @@ use crate::{
     output::FrameOutput,
 };
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod memory;
+
 #[derive(Default)]
 struct CountingOutput {
     video_frames: usize,

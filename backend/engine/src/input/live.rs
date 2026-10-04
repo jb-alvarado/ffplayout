@@ -138,6 +138,16 @@ pub(super) struct ReaderState {
 pub(super) static LIVE_READERS: LazyLock<Mutex<HashMap<ReaderKey, ReaderState>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+pub(super) fn live_reader_counts(key: &ReaderKey) -> (usize, u64) {
+    let readers = LIVE_READERS.lock().unwrap_or_else(PoisonError::into_inner);
+
+    (
+        readers.get(key).map_or(0, |state| state.count),
+        STUCK_LIVE_WORKERS.load(Ordering::Relaxed),
+    )
+}
+
 pub(super) struct LiveReaderPermit(ReaderKey);
 
 impl LiveReaderPermit {
