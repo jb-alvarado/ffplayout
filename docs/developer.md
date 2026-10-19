@@ -164,6 +164,11 @@ and [`perf report`](https://github.com/torvalds/linux/blob/master/tools/perf/Doc
 
 ## Processing Benchmark
 
+For isolated comparisons of the production media queue with Crossbeam, Kanal,
+Flume, standard channels and SPSC ring buffers, see
+[channel and queue benchmarks](channel-benchmarks.md). These tests report CPU,
+handoff latency, context switches and peak RSS without starting playout.
+
 The optional `processing-bench` feature prints periodic wall-clock timings for
 video and audio decode, audio processing and encoding, scale, overlay,
 subtitle, encoded-output, and desktop presentation stages. It is intended for local CPU

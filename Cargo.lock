@@ -2038,16 +2038,23 @@ dependencies = [
  "clap",
  "cosmic-text",
  "cpal",
+ "crossbeam-channel",
  "ebur128-stream",
  "env_logger 0.11.11",
  "ffmpeg-next",
+ "flume",
  "glob",
+ "kanal",
+ "libc",
  "log",
  "naga",
  "pkg-config",
  "pollster",
  "regex",
+ "ringbuf",
  "rten-simd",
+ "rtrb",
+ "serde_json",
  "softbuffer",
  "sysinfo",
  "tokio",
@@ -3437,6 +3444,16 @@ dependencies = [
  "signature 2.2.0",
  "simple_asn1",
  "zeroize",
+]
+
+[[package]]
+name = "kanal"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9e3953adf0cd667798b396c2fa13552d6d9b3269d7dd1154c4c416442d1ff574"
+dependencies = [
+ "futures-core",
+ "lock_api",
 ]
 
 [[package]]
@@ -5955,6 +5972,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ringbuf"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b58b631e416dd7d84549d7e6a50f767e111f9b03e30d04f40072f6618f386aaf"
+dependencies = [
+ "crossbeam-utils",
+ "portable-atomic",
+ "portable-atomic-util",
+]
+
+[[package]]
 name = "roxmltree"
 version = "0.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5985,6 +6013,12 @@ name = "rten-simd"
 version = "0.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7b45ecd18c74788450eff4bb40b290e7b4ed95fbd243745028048960b4bd18fa"
+
+[[package]]
+name = "rtrb"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9278fb35b3e730abe136e9b395b5b81b96d06b9f5478a50f0c8430a2237b22de"
 
 [[package]]
 name = "rustc-hash"

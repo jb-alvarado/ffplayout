@@ -67,9 +67,16 @@ wgpu = { version = "30.0", optional = true, default-features = false, features =
 
 [dev-dependencies]
 clap = { version = "4", features = ["derive"] }
+crossbeam-channel = "0.5"
 env_logger = "0.11"
+flume = { version = "0.12", default-features = false }
 glob = "0.3"
+kanal = "0.1"
+libc = "0.2"
 naga = { version = "30.0", features = ["wgsl-in"] }
+ringbuf = "0.5"
+rtrb = "0.4"
+serde_json = "1"
 
 [build-dependencies]
 pkg-config = "0.3"
@@ -88,4 +95,8 @@ harness = false
 
 [[bench]]
 name = "audio_dynamics"
+harness = false
+
+[[bench]]
+name = "channel_queues"
 harness = false
