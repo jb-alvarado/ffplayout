@@ -129,3 +129,45 @@ Run on an idle machine without other compiles or profiling tools. Keep power
 mode and workload identical and repeat on the actual Linux test server. Prioritize
 CPU and tail latency in paced/burst/slow workloads over maximum throughput. These
 benchmarks do not predict total playout CPU savings or prove 24/7 stability.
+
+## Full pipeline: polling versus activity notifications
+
+```sh
+python3 scripts/benchmarks/pipeline_wakeups.py
+```
+
+This Linux/macOS comparison uses the actual parallel output pipeline, not a
+queue adapter. It builds two isolated source snapshots before timing starts.
+Both keep the current composition, encoder settings, queue limits and early
+capacity check. The polling snapshot restores the scheduler, demux, encoder
+worker and delivery paths from `0452dbcb` (including the scheduler's original
+queue inspections); it preserves the current
+shared-logo interface. The current activity API remains in that snapshot but
+has no production subscribers. `recv_timeout` is enabled for its original
+delivery loop. The activity snapshot uses the current checkout unchanged.
+Source hashes and complete snapshots are retained so this comparison can be
+inspected independently of the branch's commit history.
+
+The default workload repeats `filler_0.mp4` into one 720p25 HLS output, x264
+CRF 23 / preset faster, two-second segments, no logo or MoQ. Each fresh process
+plays one clip for warmup and measures two further clips (about 30 seconds).
+Three pairs run in A/B, B/A, A/B order. Startup and finalization are outside the
+CPU/time measurement; peak RSS includes startup/warmup. CPU percentages count
+100% per core. HLS duration, resolution and video packet count are checked after
+each process. No compilation or probing runs concurrently with the measured
+workload. Run on an otherwise idle machine with the same power settings.
+
+Reports under `tmp/bench/pipeline-wakeups/` retain `runs.jsonl`, `runs.csv`,
+`summary.json`, build/run logs, executable hashes and source snapshots. The
+script uses the existing Cargo target cache and does not access the application
+database or configured outputs. For a longer comparison:
+
+```sh
+python3 scripts/benchmarks/pipeline_wakeups.py \
+    --warmup-clips 2 --measured-clips 8 --repetitions 5
+```
+
+These results apply to this HLS workload and machine. They do not measure MoQ,
+RTMP or live ingest, prove long-term memory stability, or establish the effect
+of logo sharing. Pairwise CPU differences should agree across repetitions
+before attributing small differences to the waiting strategy.

@@ -101,6 +101,28 @@ running before removing the leftover lock directory (its `pid` file records the
 owning shell).
 Image layers and the container engine's separate build cache are not pruned.
 
+### Experimental transcription example
+
+Whisper and ONNX Runtime are only enabled by the engine's optional
+`transcription-example` feature. The normal ffplayout build does not include
+them. To compile the desktop transcription example:
+
+```sh
+cargo build --locked -p ff-engine --example live_transcription --features transcription-example
+```
+
+Workspace checks with `--all-features --all-targets` also build this example.
+On Apple Silicon, `.cargo/config.toml` registers a project-scoped CMake hook
+for whisper.cpp. It checks native SVE compiler support before allowing GGML's
+forced-SVE runtime probe, which can hang at its first SVE instruction on
+[affected macOS systems](https://github.com/ggml-org/llama.cpp/pull/20064).
+Other ARM feature checks, including DotProd, I8MM and SME, remain enabled.
+The hook does nothing for other targets or CMake projects.
+
+`ort` is pinned to `2.0.0-rc.12` for this feature because the currently used
+`transcribe-rs` expects that API. Later ORT prereleases changed
+`Session::builder`; review this pin when updating the transcription dependency.
+
 ## CPU profiling with perf (Linux)
 
 Install your distribution's `perf` package matching the running kernel. Build
@@ -163,6 +185,22 @@ See the upstream documentation for
 and [`perf report`](https://github.com/torvalds/linux/blob/master/tools/perf/Documentation/perf-report.txt).
 
 ## Processing Benchmark
+
+Compare the full HLS pipeline's previous 10 ms polling with current activity
+notifications using `python3 scripts/benchmarks/pipeline_wakeups.py`. See
+[channel benchmark methodology](channel-benchmarks.md#full-pipeline-polling-versus-activity-notifications)
+for the workload, isolated builds, warmup and output validation.
+
+To compare per-encoder logo copies with resolution-shared composition, run:
+
+```sh
+cargo test -p ff-engine --release --lib benchmark_shared_logo_composition -- --ignored --nocapture
+```
+
+This manual benchmark compares 300 720p program frames with one, two and four
+encoding groups at the same resolution. It reports median elapsed times after
+warmup, alternates old/new order, and makes no timing assertion. It measures
+frame copying/composition only, not codecs, network I/O or total playout CPU.
 
 For isolated comparisons of the production media queue with Crossbeam, Kanal,
 Flume, standard channels and SPSC ring buffers, see
