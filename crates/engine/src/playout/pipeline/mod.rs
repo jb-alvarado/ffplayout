@@ -18,7 +18,7 @@ mod video;
 use crate::{
     OutputConfig,
     benchmark::{self, Stage},
-    compositor::logo::{LogoOverlay, blend_logo},
+    graphics::logo_adapter::{LogoOverlay, blend_logo},
     input::diagnostics::LiveInputDiagnostics,
     output::FrameOutput,
     utils::{

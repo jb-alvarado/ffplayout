@@ -6,21 +6,21 @@ use rten_simd::{
     ops::{BitOps, Extend, IntOps, NarrowSaturate, NumOps},
 };
 
-pub(crate) struct Plane<'a> {
+pub struct Plane<'a> {
     pub data: &'a [u8],
     pub stride: usize,
     pub x: usize,
     pub y: usize,
 }
 
-pub(crate) struct PlaneMut<'a> {
+pub struct PlaneMut<'a> {
     pub data: &'a mut [u8],
     pub stride: usize,
     pub x: usize,
     pub y: usize,
 }
 
-pub(crate) fn blend_plane(
+pub fn blend_plane(
     destination: PlaneMut<'_>,
     source: Plane<'_>,
     alpha: Plane<'_>,
@@ -157,7 +157,7 @@ fn div_255<T: IntOps<u16>>(ops: T, value: T::Simd) -> T::Simd {
 }
 
 #[inline]
-pub(crate) fn blend_scalar(destination: &mut [u8], source: &[u8], alpha: &[u8], opacity: u8) {
+pub fn blend_scalar(destination: &mut [u8], source: &[u8], alpha: &[u8], opacity: u8) {
     for ((destination, source), source_alpha) in destination.iter_mut().zip(source).zip(alpha) {
         let alpha = mul_alpha(*source_alpha, opacity);
 

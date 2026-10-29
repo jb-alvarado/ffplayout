@@ -3,8 +3,17 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[path = "../src/compositor/blend.rs"]
-mod blend;
+use ff_graphics::{blend, ffmpeg::overlay};
+
+#[allow(dead_code, unused_imports)]
+#[path = "../examples/frame_blend/color.rs"]
+mod color;
+#[path = "../examples/frame_blend/linear_simd.rs"]
+mod linear_simd;
+#[path = "overlay_blend/comparison.rs"]
+mod overlay_comparison;
+#[path = "../examples/frame_blend/video_input.rs"]
+mod video_input;
 
 const SAMPLE_COUNT: usize = 25;
 const SAMPLE_TARGET: Duration = Duration::from_millis(40);
@@ -55,6 +64,8 @@ fn main() {
     for scenario in scenarios {
         run_scenario(&scenario);
     }
+
+    overlay_comparison::run().expect("complete-overlay comparison failed");
 }
 
 fn run_scenario(scenario: &Scenario) {

@@ -18,7 +18,7 @@ use log::{debug, info, warn};
 use crate::{
     PlaybackControl,
     audio_mixer::{LiveLoudnessProcessor, TRUE_PEAK_FUTURE_SAMPLES, lookahead_samples},
-    compositor::logo::LogoOverlay,
+    graphics::logo_adapter::LogoOverlay,
     output::FrameOutput,
     playout::check_playback_control,
     utils::ffmpeg::{make_audio_frame_writable, reference_audio_frame, reference_video_frame},

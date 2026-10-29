@@ -24,7 +24,7 @@ use crate::benchmark::BenchHandle;
 use crate::{
     HlsHealth,
     clock::SharedPlayoutClock,
-    compositor::logo::{LogoOverlay, blend_logo},
+    graphics::logo_adapter::{LogoOverlay, blend_logo},
     input::diagnostics::LiveInputDiagnostics,
     utils::config::{HlsSubtitle, HlsVariant, OutputConfig},
 };

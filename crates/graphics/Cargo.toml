@@ -1,0 +1,45 @@
+[package]
+name = "ff-graphics"
+description = "Internal native graphics rendering and compositing for ffplayout"
+version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+edition.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[features]
+default = []
+ffmpeg = ["dep:ffmpeg-next", "dep:rayon", "dep:log"]
+
+[dependencies]
+rayon = { version = "1.12", optional = true }
+log = { version = "0.4", optional = true }
+anyhow = "1"
+cosmic-text = "0.19"
+rten-simd = "0.27"
+ffmpeg-next = { version = "9", optional = true, default-features = false, features = ["format", "software-scaling"] }
+
+[dev-dependencies]
+libc = "0.2"
+clap = { version = "4", features = ["derive"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+tiny-skia = "0.11.4"
+yuv = { version = "0.8.19", default-features = false, features = ["avx", "sse", "rdm", "professional_mode"] }
+
+[[example]]
+name = "frame_blend"
+required-features = ["ffmpeg"]
+
+[[bench]]
+name = "overlay_blend"
+harness = false
+required-features = ["ffmpeg"]
+
+[[bench]]
+name = "yuv_execution"
+harness = false
+required-features = ["ffmpeg"]

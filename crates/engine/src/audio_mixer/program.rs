@@ -5,7 +5,7 @@ use ffmpeg_next::{Rational, Rescale, frame};
 
 use crate::{
     benchmark::{self, Stage},
-    compositor::logo::LogoOverlay,
+    graphics::logo_adapter::LogoOverlay,
     output::FrameOutput,
     utils::{
         config::OutputConfig,

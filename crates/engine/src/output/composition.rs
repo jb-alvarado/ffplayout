@@ -1,4 +1,4 @@
-//! Share a composited frame across encoders, retaining logo pixel dimensions.
+//! Share composited program frames across desktop, recording and encoders.
 use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex, PoisonError},
@@ -8,7 +8,7 @@ use anyhow::Result;
 use ffmpeg_next::{format::Pixel, frame, software::scaling};
 
 use crate::{
-    compositor::logo::{LogoOverlay, blend_logo},
+    graphics::logo_adapter::{LogoOverlay, blend_logo},
     utils::ffmpeg::{make_video_frame_writable, reference_video_frame},
 };
 
@@ -135,7 +135,7 @@ struct PreparedFrame {
 
 impl ProgramVideo {
     pub(super) fn has_visible_logo(&self) -> bool {
-        self.opacity > 0.0 && self.logo.as_ref().is_some_and(|logo| logo.opacity > 0)
+        self.opacity > 0.0 && self.logo.as_ref().is_some_and(|logo| logo.opacity() > 0)
     }
 
     pub(super) fn new(
@@ -170,7 +170,7 @@ impl ProgramVideo {
         let Some(logo) = self
             .logo
             .as_ref()
-            .filter(|logo| self.opacity > 0.0 && logo.opacity > 0)
+            .filter(|logo| self.opacity > 0.0 && logo.opacity() > 0)
         else {
             // Preserve the encoder's direct YUV/NV12 conversion without a visible logo.
             return reference_video_frame(&self.source);
@@ -375,8 +375,11 @@ mod tests {
         for ((width, height), state) in &compositor.resolutions {
             let state = state.lock().unwrap();
             let logo = state.logo.as_ref().unwrap();
-            assert_eq!((logo.width, logo.height), (32, 16));
-            assert_eq!((logo.x, logo.y), (width - 32 - 8, height - 16 - 8));
+            assert_eq!((logo.width(), logo.height()), (32, 16));
+            assert_eq!(
+                (logo.position().0, logo.position().1),
+                (width - 32 - 8, height - 16 - 8)
+            );
         }
         assert!(source.data(0).iter().all(|value| *value == 128));
         assert!(large.data(0).iter().any(|value| *value != 128));

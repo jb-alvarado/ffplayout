@@ -13,7 +13,10 @@ mod pipeline;
 use crate::{
     LogoFade, PlaybackControl,
     benchmark::{self, Stage},
-    compositor::{logo::*, text::TextOverlay},
+    graphics::{
+        logo_adapter::*,
+        text_adapter::{TextOverlay, TextPreparation, TextTiming},
+    },
     input::timestamps::LiveTimestampTracker,
     output::FrameOutput,
     utils::{
@@ -1113,7 +1116,7 @@ fn apply_overlays(
 
     if let Some(logo) = &video.logo {
         if output.benchmarks_logo_overlay() {
-            benchmark::measure_overlay(Stage::LogoOverlay, logo.width, logo.height, || {
+            benchmark::measure_overlay(Stage::LogoOverlay, logo.width(), logo.height(), || {
                 output.apply_logo_overlay(frame, logo, opacity);
             });
         } else {
@@ -1494,15 +1497,19 @@ impl RuntimeTextOverlay {
             .config
             .as_ref()
             .map(|text| {
-                TextOverlay::load(
+                TextOverlay::prepare(
                     text,
                     label,
-                    cfg.width,
-                    cfg.height,
-                    cfg.fps,
-                    start_pts,
-                    snapshot.start_pts.unwrap_or(scroll_pts),
-                    None,
+                    TextPreparation {
+                        canvas_width: cfg.width,
+                        canvas_height: cfg.height,
+                        frames_per_second: cfg.fps,
+                        timing: TextTiming {
+                            fade_start_frame: start_pts,
+                            scroll_start_frame: snapshot.start_pts.unwrap_or(scroll_pts),
+                            end_frame: None,
+                        },
+                    },
                 )
             })
             .transpose()?
@@ -1530,15 +1537,19 @@ impl RuntimeTextOverlay {
 
         self.revision = snapshot.revision;
         self.overlay = snapshot.config.and_then(|config| {
-            TextOverlay::load(
+            TextOverlay::prepare(
                 &config,
                 &self.label,
-                self.width,
-                self.height,
-                self.fps,
-                pts,
-                snapshot.start_pts.unwrap_or(scroll_pts),
-                None,
+                TextPreparation {
+                    canvas_width: self.width,
+                    canvas_height: self.height,
+                    frames_per_second: self.fps,
+                    timing: TextTiming {
+                        fade_start_frame: pts,
+                        scroll_start_frame: snapshot.start_pts.unwrap_or(scroll_pts),
+                        end_frame: None,
+                    },
+                },
             )
             .map_err(|error| {
                 debug!(channel = self.channel_id; "failed to render {}: {error:#}", self.context);
@@ -1644,8 +1655,19 @@ impl VideoDecoder {
                 .text
                 .as_ref()
                 .map(|text| {
-                    TextOverlay::load(
-                        text, label, cfg.width, cfg.height, cfg.fps, start_pts, 0, end_pts,
+                    TextOverlay::prepare(
+                        text,
+                        label,
+                        TextPreparation {
+                            canvas_width: cfg.width,
+                            canvas_height: cfg.height,
+                            frames_per_second: cfg.fps,
+                            timing: TextTiming {
+                                fade_start_frame: start_pts,
+                                scroll_start_frame: 0,
+                                end_frame: end_pts,
+                            },
+                        },
                     )
                 })
                 .transpose()?
@@ -2362,15 +2384,19 @@ impl FallbackOverlays {
                 .text
                 .as_ref()
                 .map(|text| {
-                    TextOverlay::load(
+                    TextOverlay::prepare(
                         text,
                         label,
-                        cfg.width,
-                        cfg.height,
-                        cfg.fps,
-                        fade_start_pts,
-                        0,
-                        end_pts,
+                        TextPreparation {
+                            canvas_width: cfg.width,
+                            canvas_height: cfg.height,
+                            frames_per_second: cfg.fps,
+                            timing: TextTiming {
+                                fade_start_frame: fade_start_pts,
+                                scroll_start_frame: 0,
+                                end_frame: end_pts,
+                            },
+                        },
                     )
                 })
                 .transpose()?

@@ -17,7 +17,7 @@ use tokio::sync::oneshot;
 mod analysis;
 mod audio_mixer;
 mod benchmark;
-mod compositor;
+mod graphics;
 mod input;
 #[cfg(feature = "desktop-base")]
 mod loudness_preview;
@@ -75,7 +75,7 @@ pub use utils::{
 };
 
 pub fn available_font_families() -> Vec<String> {
-    compositor::text::available_font_families()
+    graphics::text_adapter::available_font_families()
 }
 
 /// Sets the report interval for the optional `processing-bench` feature.
@@ -854,7 +854,7 @@ impl Playout {
 }
 
 fn init_ffmpeg(config: &OutputConfig) -> Result<()> {
-    compositor::text::init();
+    graphics::text_adapter::init();
     ffmpeg_next::init().context("failed to initialize FFmpeg")?;
     logging::init(
         config.ffmpeg_log_level,

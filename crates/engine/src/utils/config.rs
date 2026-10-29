@@ -1305,47 +1305,9 @@ impl Default for TextConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum TextWeight {
-    #[default]
-    Normal,
-    Semibold,
-    Bold,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct RgbaColor {
-    pub r: u8,
-    pub g: u8,
-    pub b: u8,
-    pub a: u8,
-}
-
-impl RgbaColor {
-    pub const fn opaque(r: u8, g: u8, b: u8) -> Self {
-        Self { r, g, b, a: 255 }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TextPosition {
-    Pixels(i32),
-    Center,
-    End(i32),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct TextBackgroundConfig {
-    pub color: RgbaColor,
-    pub padding: u32,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TextScroll {
-    None,
-    LeftToRight { pixels_per_second: u32 },
-    RightToLeft { pixels_per_second: u32 },
-}
+pub use ff_graphics::style::{
+    RgbaColor, TextBackgroundConfig, TextPosition, TextScroll, TextWeight,
+};
 
 #[derive(Debug, Clone, Default)]
 pub struct TextOverlayState {
