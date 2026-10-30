@@ -548,13 +548,17 @@ function runControl(button: PlayerControlButton) {
                 <div class="bg-base-100 h-full min-h-24 rounded-sm shadow flex flex-col items-center px-2 py-2 gap-2">
                     <div class="flex flex-1 min-h-20 items-stretch justify-center gap-3 w-full">
                         <div
-                            class="relative min-h-20 w-3.5 shrink-0 rounded-sm overflow-hidden bg-linear-to-t from-success from-70% via-warning via-80% to-error to-100%"
+                            class="relative min-h-20 w-3.5 shrink-0 border border-base-content/30 rounded-full overflow-hidden"
                         >
                             <div
-                                class="absolute top-0 left-0 w-full bg-base-300"
-                                :class="useMoqPreview ? '' : 'transition-[height] duration-200'"
-                                :style="{ height: `${100 - audioMeterValue()}%` }"
-                            />
+                                class="h-full w-full bg-linear-to-t from-success from-70% via-warning via-80% to-error to-100%"
+                            >
+                                <div
+                                    class="absolute top-0 left-0 w-full bg-base-300"
+                                    :class="useMoqPreview ? '' : 'transition-[height] duration-200'"
+                                    :style="{ height: `${100 - audioMeterValue()}%` }"
+                                />
+                            </div>
                         </div>
                         <input
                             v-model.number="volumeLevel"
@@ -564,7 +568,7 @@ function runControl(button: PlayerControlButton) {
                             step="0.01"
                             :aria-label="t('control.volume')"
                             aria-orientation="vertical"
-                            class="range range-vertical range-primary bg-base-300 self-stretch min-h-20 shrink-0"
+                            class="range range-vertical range-primary disabled:opacity-100 border border-base-content/30 bg-base-300 self-stretch min-h-20 shrink-0"
                             style="height: auto; --range-thumb-size: 0.875rem; --range-p: 0.125rem"
                             :disabled="!controlsUnlocked"
                             @input="applyVolumeControl"

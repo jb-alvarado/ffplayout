@@ -418,6 +418,7 @@ async function deletePlaylist(del: boolean) {
                     :time-config="{ enableTimePicker: false }"
                     model-type="yyyy-MM-dd"
                     auto-apply
+                    class="rounded border border-base-content/30"
                     :locale="lang"
                     :dark="indexStore.darkMode"
                     :ui="{ input: 'input input-sm text-right pe-3!' }"
@@ -527,9 +528,10 @@ async function deletePlaylist(del: boolean) {
                 :time-config="{ enableTimePicker: false }"
                 model-type="yyyy-MM-dd"
                 auto-apply
+                class="rounded border border-base-content/30"
                 :locale="lang"
                 :dark="indexStore.darkMode"
-                :ui="{ input: 'input input-sm !!w-[full text-right !pe-3' }"
+                :ui="{ input: 'input input-sm w-full text-right pe-3' }"
                 required
             />
         </GenericModal>
