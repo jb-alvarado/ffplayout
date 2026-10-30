@@ -646,6 +646,7 @@ fn default_vtt_language() -> String {
 
 #[derive(Debug, sqlx::FromRow)]
 pub struct LiveInputRecord {
+    pub auto_takeover: bool,
     pub idle_timeout_ms: u32,
     pub id: i32,
     pub priority: i32,

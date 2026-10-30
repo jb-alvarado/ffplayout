@@ -182,8 +182,12 @@ pub async fn get_data_map(manager: &ChannelManager) -> Map<String, Value> {
         .clone()
         .unwrap_or_else(Media::default);
     let channel = manager.channel.lock().await.clone();
-    let config = manager.config.read().await.processing.clone();
-    let (ingest_is_alive, ingest_listener_id) = manager.playback_control.lock().await.live_status();
+    let (config, listeners) = {
+        let saved = manager.config.read().await;
+        (saved.processing.clone(), saved.ingest.listeners.clone())
+    };
+    let playback_control = manager.playback_control.lock().await.clone();
+    let (ingest_is_alive, ingest_listener_id) = playback_control.live_status();
     let ingest_listener = ingest_listener_id.and_then(|id| manager.running_listener_label(id));
 
     let mut data_map = Map::new();
@@ -194,6 +198,25 @@ pub async fn get_data_map(manager: &ChannelManager) -> Map<String, Value> {
 
     data_map.insert("index".to_string(), json!(media.index));
     data_map.insert("ingest".to_string(), json!(ingest_is_alive));
+    let ingest_control = playback_control.live_ingest();
+    let statuses = ingest_control.snapshot();
+    let inputs: Vec<_> = listeners
+        .iter()
+        .filter(|input| input.enabled)
+        .map(|input| {
+            let status = statuses.iter().find(|status| status.id == input.id);
+            json!({
+                "id": input.id,
+                "name": input.name,
+                "backend": input.backend,
+                "auto_takeover": input.auto_takeover,
+                "session": status.map_or("", |status| status.session.as_str()),
+                "ready": status.is_some_and(|status| status.ready),
+                "selected": status.is_some_and(|status| status.selected),
+            })
+        })
+        .collect();
+    data_map.insert("ingest_inputs".into(), json!(inputs));
     data_map.insert("ingest_listener_id".to_string(), json!(ingest_listener_id));
     data_map.insert(
         "ingest_listener_name".to_string(),

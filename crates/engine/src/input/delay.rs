@@ -31,7 +31,10 @@ impl LiveDelay {
         self.events
             .iter()
             .take_while(move |(_, event)| {
-                !matches!(event, LiveEvent::Started { .. } | LiveEvent::Ended(_))
+                !matches!(
+                    event,
+                    LiveEvent::Selection(_) | LiveEvent::Started { .. } | LiveEvent::Ended(_)
+                )
             })
             .filter_map(move |(_, event)| match event {
                 LiveEvent::Audio(id, audio) if *id == session_id => Some(audio),
@@ -110,7 +113,7 @@ impl LiveDelay {
                 );
                 let session_ended = self.events.iter().any(|(_, event)| {
                     matches!(event, LiveEvent::Ended(id) if id == session_id)
-                        || matches!(event, LiveEvent::Started { .. })
+                        || matches!(event, LiveEvent::Selection(_) | LiveEvent::Started { .. })
                 });
 
                 if preview.len() < needed && !session_ended {
@@ -123,7 +126,12 @@ impl LiveDelay {
                         .iter()
                         .skip(1)
                         .take_while(|(_, event)| {
-                            !matches!(event, LiveEvent::Started { .. } | LiveEvent::Ended(_))
+                            !matches!(
+                                event,
+                                LiveEvent::Selection(_)
+                                    | LiveEvent::Started { .. }
+                                    | LiveEvent::Ended(_)
+                            )
                         })
                         .any(|(received_at, event)| {
                             matches!(event, LiveEvent::Video(id, _) if id == session_id)

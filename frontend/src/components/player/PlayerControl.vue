@@ -59,6 +59,58 @@ const controlsUnlocked = ref(false)
 const lastReportedRunning = ref<boolean | null>(null)
 const moqAudioLevel = ref<AudioLevel | null>(null)
 const volumeLevel = ref(configStore.playout.audio?.volume ?? 1)
+const liveRequestPending = ref(false)
+const ingestStatusReceived = ref(false)
+const liveInputs = computed(() => {
+    const inputs: LiveInputStatus[] = ingestStatusReceived.value
+        ? playlistStore.ingestInputs
+        : (configStore.playoutSaved.ingest?.listeners ?? [])
+              .filter((input) => input.enabled)
+              .map((input) => ({ ...input, session: '', ready: false, selected: false }))
+
+    return inputs
+        .filter((input) => !input.auto_takeover)
+        .map((input) => ({ ...input, name: input.name ?? '', backend: input.backend ?? '', status: input }))
+})
+const liveSwitching = computed(() =>
+    playlistStore.ingestInputs.some(
+        (input) => input.selected !== (playlistStore.ingestRuns && playlistStore.ingestListenerId === input.id),
+    ),
+)
+
+function liveButtonLabel(input: (typeof liveInputs.value)[number]) {
+    const name = input.name.trim() || `${input.backend.toUpperCase()} #${input.id}`
+    const active = playlistStore.ingestRuns && playlistStore.ingestListenerId === input.id
+    const key =
+        input.status?.selected !== active && (input.status?.selected || active)
+            ? 'control.liveSwitching'
+            : active
+              ? 'control.liveEnd'
+              : input.status?.ready
+                ? 'control.liveTake'
+                : 'control.liveNoSignal'
+
+    return `${name} · ${t(key)}`
+}
+
+async function selectLiveInput(input: (typeof liveInputs.value)[number]) {
+    const session = input.status?.session
+    if (!session || !controlsUnlocked.value || liveRequestPending.value || liveSwitching.value) return
+
+    liveRequestPending.value = true
+    const channelId = configStore.channels[configStore.i]?.id
+    try {
+        await authFetch(`/api/control/${channelId}/ingest`, {
+            method: 'PUT',
+            headers: { ...configStore.contentType, ...authStore.authHeader },
+            body: JSON.stringify({ listener_id: input.id, session, active: !input.status?.selected }),
+        })
+    } catch (error) {
+        indexStore.msgAlert('error', error instanceof Error ? error.message : String(error), 3)
+    } finally {
+        liveRequestPending.value = false
+    }
+}
 const useMoqPreview = computed(() =>
     [configStore.playoutSaved.output, ...(configStore.playoutSaved.outputs ?? [])].some(
         (output) => output?.enabled && output.mode === 'moq',
@@ -187,9 +239,17 @@ watch([status, error], async () => {
 watch([data], () => {
     if (data.value && data.value !== 'connected') {
         try {
-            const playout_status = JSON.parse(data.value)
-            playlistStore.setStatus(playout_status)
-            updateControlsForStatus(true)
+            const playout_status = JSON.parse(data.value) as PlayoutStatus
+            if (playout_status.running === false) {
+                playlistStore.playoutIsRunning = false
+                resetStatus()
+                playlistStore.ingestInputs = playout_status.ingest_inputs ?? []
+                updateControlsForStatus(false)
+            } else {
+                playlistStore.setStatus(playout_status)
+                updateControlsForStatus(true)
+            }
+            ingestStatusReceived.value = true
         } catch {
             indexStore.sseConnected = true
             playlistStore.playoutIsRunning = false
@@ -280,6 +340,8 @@ async function clock() {
 }
 
 function resetStatus() {
+    ingestStatusReceived.value = false
+    playlistStore.ingestInputs = []
     playlistStore.ingestRuns = false
     playlistStore.ingestListenerId = null
     playlistStore.ingestListenerName = null
@@ -361,7 +423,7 @@ function runControl(button: PlayerControlButton) {
 <template>
     <div class="w-full">
         <div
-            class="grid grid-cols-[48px_auto] md:grid-cols-[auto_50px_360px] lg:grid-cols-[auto_50px_510px] xl:grid-cols-[512px_auto_48px_450px]"
+            class="grid grid-cols-[80px_auto] md:grid-cols-[auto_80px_360px] lg:grid-cols-[auto_80px_510px] xl:grid-cols-[512px_auto_80px_450px]"
         >
             <div class="order-1 col-span-2 md:col-span-1 p-1">
                 <div class="bg-base-100 w-full h-full rounded-sm shadow-sm flex items-center p-2">
@@ -483,15 +545,42 @@ function runControl(button: PlayerControlButton) {
             </div>
 
             <div class="order-3 md:order-2 xl:order-3 p-1">
-                <div class="bg-base-100 h-full min-h-24 rounded-sm shadow flex items-center justify-center px-3 py-2">
-                    <div
-                        class="relative h-full min-h-20 w-4 rounded-sm overflow-hidden bg-linear-to-t from-success from-70% via-warning via-80% to-error to-100%"
-                    >
+                <div class="bg-base-100 h-full min-h-24 rounded-sm shadow flex flex-col items-center px-2 py-2 gap-2">
+                    <div class="flex flex-1 min-h-20 items-stretch justify-center gap-3 w-full">
                         <div
-                            class="absolute top-0 left-0 w-full bg-base-300"
-                            :class="useMoqPreview ? '' : 'transition-[height] duration-200'"
-                            :style="{ height: `${100 - audioMeterValue()}%` }"
+                            class="relative min-h-20 w-3.5 shrink-0 rounded-sm overflow-hidden bg-linear-to-t from-success from-70% via-warning via-80% to-error to-100%"
+                        >
+                            <div
+                                class="absolute top-0 left-0 w-full bg-base-300"
+                                :class="useMoqPreview ? '' : 'transition-[height] duration-200'"
+                                :style="{ height: `${100 - audioMeterValue()}%` }"
+                            />
+                        </div>
+                        <input
+                            v-model.number="volumeLevel"
+                            type="range"
+                            min="0"
+                            max="1.5"
+                            step="0.01"
+                            :aria-label="t('control.volume')"
+                            aria-orientation="vertical"
+                            class="range range-vertical range-primary bg-base-300 self-stretch min-h-20 shrink-0"
+                            style="height: auto; --range-thumb-size: 0.875rem; --range-p: 0.125rem"
+                            :disabled="!controlsUnlocked"
+                            @input="applyVolumeControl"
                         />
+                    </div>
+                    <div class="flex items-center justify-center">
+                        <button
+                            type="button"
+                            class="btn btn-ghost btn-xs p-0 flex items-center justify-center text-base"
+                            :disabled="!controlsUnlocked"
+                            :aria-label="t('control.mute')"
+                            @click="muteAudio"
+                        >
+                            <i class="text-xl" :class="volumeIcon()" />
+                        </button>
+                        <span class="w-7 text-center text-xs tabular-nums">{{ volumeLevel.toFixed(2) }}</span>
                     </div>
                 </div>
             </div>
@@ -546,7 +635,7 @@ function runControl(button: PlayerControlButton) {
                         <div class="flex items-center gap-2">
                             <button
                                 type="button"
-                                class="btn btn-ghost btn-xs flex items-center justify-center px-1 text-base"
+                                class="btn btn-ghost btn-xs shrink-0 flex items-center justify-center px-1 text-base"
                                 :class="controlsUnlocked && 'text-warning'"
                                 :title="t(controlsUnlocked ? 'control.lockControls' : 'control.unlockControls')"
                                 :aria-label="t(controlsUnlocked ? 'control.lockControls' : 'control.unlockControls')"
@@ -559,25 +648,32 @@ function runControl(button: PlayerControlButton) {
                                     aria-hidden="true"
                                 />
                             </button>
-                            <span class="h-6 w-px shrink-0 bg-base-content/30" aria-hidden="true" />
-                            <button
-                                class="btn btn-sm px-1 btn-primary text-xl text-base-content/70"
-                                :disabled="!controlsUnlocked"
-                                @click="muteAudio"
-                            >
-                                <i :class="[volumeIcon(), !controlsUnlocked && 'opacity-40']" />
-                            </button>
-                            <input
-                                v-model.number="volumeLevel"
-                                type="range"
-                                min="0"
-                                max="1.5"
-                                step="0.01"
-                                class="range range-primary range-sm flex-1 bg-base-300"
-                                :disabled="!controlsUnlocked"
-                                @input="applyVolumeControl"
-                            />
-                            <span class="w-7 text-right text-xs tabular-nums">{{ volumeLevel.toFixed(2) }}</span>
+                            <div v-if="liveInputs.length" class="flex flex-wrap gap-2 min-w-0">
+                                <button
+                                    v-for="input in liveInputs"
+                                    :key="input.id"
+                                    type="button"
+                                    class="btn btn-xs h-auto min-h-7 py-1"
+                                    :class="input.status?.selected ? 'btn-success text-black' : 'btn-outline'"
+                                    :disabled="
+                                        !controlsUnlocked ||
+                                        !playlistStore.playoutIsRunning ||
+                                        liveRequestPending ||
+                                        liveSwitching ||
+                                        (!input.status?.ready && !input.status?.selected)
+                                    "
+                                    :aria-pressed="!!input.status?.selected"
+                                    @click="selectLiveInput(input)"
+                                >
+                                    <span
+                                        v-if="!input.status?.selected"
+                                        class="size-1.5 shrink-0 rounded-full"
+                                        :class="input.status?.ready ? 'bg-success' : 'bg-error'"
+                                        aria-hidden="true"
+                                    />
+                                    {{ liveButtonLabel(input) }}
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>

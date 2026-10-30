@@ -52,6 +52,12 @@ export default {
     control: {
         noClip: 'Es wird kein Clip abgespielt',
         ingest: 'Live-Übertragung',
+        liveNoSignal: 'Kein Signal',
+        liveTake: 'Live schalten',
+        liveEnd: 'Live beenden',
+        liveSwitching: 'Wird umgeschaltet …',
+        volume: 'Lautstärke',
+        mute: 'Stummschalten',
         navigationDisabledLive: 'Während einer Live-Übertragung ist die Playlist-Navigation deaktiviert.',
         unlockControls: 'Steuerung entsperren',
         lockControls: 'Steuerung sperren',
@@ -323,6 +329,9 @@ export default {
         apply: 'Anwenden',
         volumeApplied: 'Lautstärke angewendet.',
         volumeApplyFailed: 'Lautstärke konnte nicht angewendet werden.',
+        ingestAutoTakeover: 'Diesen Live-Eingang automatisch auf Sendung schalten',
+        ingestAutoTakeoverHelp:
+            'Wenn deaktiviert, bleibt dieser Eingang bereit und wird auf der Playerseite manuell übernommen. Eine bereits laufende Übernahme bleibt beim Ändern dieser Einstellung auf Sendung.',
         ingestHelp: `RTMP- und SRT-Listener können die Playlist übernehmen, sobald Video empfangen wird. Mehrere Listener können gleichzeitig warten; ein laufender Takeover wird nicht verdrängt. Listener desselben Protokolls benötigen unterschiedliche Ports.`,
         liveListenerEnabled: 'Aktiviert',
         liveListenerAdd: 'Listener hinzufügen',

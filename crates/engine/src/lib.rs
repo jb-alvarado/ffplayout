@@ -17,12 +17,13 @@ use tokio::sync::oneshot;
 mod analysis;
 mod audio_mixer;
 mod benchmark;
+mod control_live;
+mod control_playback;
 mod graphics;
 mod input;
 #[cfg(feature = "desktop-base")]
 mod loudness_preview;
 mod output;
-mod playback_control;
 mod playout;
 mod utils;
 
@@ -34,6 +35,8 @@ pub use audio_mixer::{
     LiveLoudnessControl, LiveLoudnessMeasurement, LiveLoudnessMetrics, LiveLoudnessProcessor,
     LoudnessScope,
 };
+pub use control_live::{LiveIngestControl, LiveInputStatus};
+pub use control_playback::{LiveSession, NavigationBlocked, PlaybackControl, PlaylistNavigation};
 pub use input::live::{
     DEFAULT_LIVE_IDLE_TIMEOUT_MS, LiveIdleTimeout, LiveInputBackend, LiveListenerConfig,
     LiveReceiver, live_protocol_available, spawn_live_listeners, spawn_rtmp_listener,
@@ -47,7 +50,6 @@ pub use output::parallel::{
 };
 pub use output::resolved_variant_playlist_path;
 use output::{FrameOutput, Output, PlaybackStopped};
-pub use playback_control::{LiveSession, NavigationBlocked, PlaybackControl, PlaylistNavigation};
 use playout::{PlaybackRestart, PlaybackSkipped, Timeline, write_fallback};
 pub use utils::{
     clock,
@@ -67,6 +69,7 @@ pub use utils::{
     },
     helper::is_live_input,
     logging,
+    logging::set_ingest_log_level,
     media_info::{
         AudioStream as EngineAudioStream, MediaInfo, MediaProbe as EngineMediaProbe, ProbeFormat,
         SilenceDetection, VideoStream as EngineVideoStream, detect_audio_silence,
@@ -480,7 +483,11 @@ fn run_async_playout_worker(mut playout: Playout, commands: mpsc::Receiver<Async
                 config,
                 response,
             } => {
-                live = (!inputs.is_empty()).then(|| spawn_live_listeners(inputs, *config));
+                live = Some(input::live::spawn_controlled_live_listeners(
+                    inputs,
+                    *config,
+                    playout.playback_control.live_ingest(),
+                ));
                 if let Some(receiver) = live.as_ref() {
                     receiver.set_benchmark(benchmark::current());
                 }

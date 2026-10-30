@@ -97,6 +97,8 @@ impl FrameOutput for CountingOutput {
 
 fn test_live_receiver(rx: mpsc::Receiver<LiveEvent>) -> LiveReceiver {
     LiveReceiver {
+        selection_control: None,
+        selection_revision: None,
         rx,
         pending_event: None,
         delay: super::delay::LiveDelay::new(Duration::ZERO, 25, 48_000),
@@ -136,6 +138,424 @@ fn test_live_receiver(rx: mpsc::Receiver<LiveEvent>) -> LiveReceiver {
     }
 }
 
+fn listener_config(id: i32, priority: i32) -> crate::LiveListenerConfig {
+    crate::LiveListenerConfig {
+        id,
+        priority,
+        idle_timeout: crate::LiveIdleTimeout::default(),
+        backend: crate::LiveInputBackend::Rtmp,
+        url: format!("rtmp://127.0.0.1:{}/live/test", 19000 + id),
+        options: BTreeMap::new(),
+        demuxer_options: BTreeMap::new(),
+    }
+}
+
+#[test]
+fn live_listener_updates_preserve_active_source_and_invalidate_only_when_removed() {
+    let control = crate::LiveIngestControl::default();
+    let mut slots = Vec::new();
+    let mut senders = Vec::new();
+    for id in [1, 2] {
+        let (tx, rx) = mpsc::channel();
+        senders.push(tx);
+        let config = listener_config(id, 0);
+        control.started(id, 10, Duration::from_secs(5));
+        control.video(id, 10, Duration::from_secs(5));
+        slots.push(ListenerSlot {
+            config: Some(config),
+            receiver: test_live_receiver(rx),
+            session: Some((10, false, id)),
+            closed: false,
+            pending_audio: VecDeque::new(),
+            pending_audio_samples: 0,
+        });
+    }
+    control.forwarding(Some((1, 10)));
+    let runtime = super::live::LiveRelayRuntime {
+        config: crate::OutputConfig::new(64, 64, 25, 48_000),
+        benchmark: Arc::new(Mutex::new(None)),
+    };
+    let mut selected = Some((0, 10, 99));
+    let mut pending = VecDeque::from([LiveEvent::Video(99, frame::Video::empty())]);
+    super::live::update_listener_slots(
+        &mut slots,
+        vec![listener_config(1, 0), listener_config(2, 100)],
+        &runtime,
+        &control,
+        &mut selected,
+        &mut pending,
+    );
+    assert_eq!(
+        selected,
+        Some((1, 10, 99)),
+        "priority changes must retain the current source"
+    );
+    assert_eq!(control.revision(), 0);
+    assert_eq!(pending.len(), 1);
+    assert!(!slots[1].receiver.abort.load(Ordering::Relaxed));
+    let standby_abort = slots[0].receiver.abort.clone();
+    let active_abort = slots[1].receiver.abort.clone();
+    super::live::update_listener_slots(
+        &mut slots,
+        vec![listener_config(1, 0)],
+        &runtime,
+        &control,
+        &mut selected,
+        &mut pending,
+    );
+    assert!(standby_abort.load(Ordering::Relaxed));
+    assert!(!active_abort.load(Ordering::Relaxed));
+    assert_eq!(selected, Some((0, 10, 99)));
+    assert_eq!(control.revision(), 0);
+    super::live::update_listener_slots(
+        &mut slots,
+        vec![],
+        &runtime,
+        &control,
+        &mut selected,
+        &mut pending,
+    );
+    assert!(active_abort.load(Ordering::Relaxed));
+    assert!(selected.is_none());
+    assert!(control.snapshot().is_empty());
+    assert_eq!(control.revision(), 1);
+    assert!(matches!(pending.pop_front(), Some(LiveEvent::Ended(99))));
+    assert!(
+        pending.is_empty(),
+        "buffered frames from the removed source must be discarded"
+    );
+}
+
+#[test]
+fn live_listener_transport_comparison_includes_protocol_and_demuxer_options() {
+    let original = listener_config(1, 0);
+    let mut updated = original.clone();
+    updated.priority = 100;
+    assert!(super::live::same_listener_transport(&original, &updated));
+    updated.options.insert("tcp_nodelay".into(), "1".into());
+    assert!(!super::live::same_listener_transport(&original, &updated));
+    updated = original.clone();
+    updated
+        .demuxer_options
+        .insert("format".into(), "live_flv".into());
+    assert!(!super::live::same_listener_transport(&original, &updated));
+    updated = original.clone();
+    updated.url.push_str("-new");
+    assert!(!super::live::same_listener_transport(&original, &updated));
+    updated = original.clone();
+    updated.backend = crate::LiveInputBackend::Srt;
+    assert!(!super::live::same_listener_transport(&original, &updated));
+}
+
+#[test]
+fn live_listener_can_be_added_reconfigured_removed_and_readded_while_running() {
+    use std::{
+        net::TcpListener,
+        process::{Child, Command, Stdio},
+    };
+    struct Publisher(Child);
+    impl Drop for Publisher {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let socket = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = socket.local_addr().unwrap().port();
+    drop(socket);
+    let mut input = listener_config(71, 0);
+    input.url = format!("rtmp://127.0.0.1:{port}/live/test");
+    input.demuxer_options = BTreeMap::from([
+        ("analyzeduration".into(), "100000".into()),
+        ("probesize".into(), "32768".into()),
+    ]);
+    let control = crate::LiveIngestControl::default();
+    control.set_automatic(input.id, false);
+    let receiver = super::live::spawn_controlled_live_listeners(
+        vec![],
+        crate::OutputConfig::new(64, 64, 25, 48_000),
+        control.clone(),
+    );
+    let mut old_token = None;
+    for round in 0..3 {
+        control.update_listeners(vec![input.clone()]);
+        // The empty relay sleeps until its configuration is updated.
+        thread::sleep(Duration::from_millis(if round == 1 { 1300 } else { 200 }));
+        let publisher = Publisher(
+            Command::new("ffmpeg")
+                .args([
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-re",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "testsrc2=size=64x64:rate=25",
+                    "-t",
+                    "12",
+                    "-c:v",
+                    "flv1",
+                    "-f",
+                    "flv",
+                    &input.url,
+                ])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap(),
+        );
+        let deadline = Instant::now() + Duration::from_secs(8);
+        let token = loop {
+            if let Some(status) = control.snapshot().into_iter().find(|status| status.ready) {
+                break status.session;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "dynamically added listener never became ready"
+            );
+            thread::sleep(Duration::from_millis(10));
+        };
+        assert_ne!(old_token.as_ref(), Some(&token));
+        control.select(input.id, &token, true).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if matches!(
+                receiver.rx.recv_timeout(Duration::from_millis(100)),
+                Ok(LiveEvent::Video(..))
+            ) {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "selected source produced no video"
+            );
+        }
+        if round == 0 {
+            input
+                .demuxer_options
+                .insert("format".into(), "live_flv".into());
+            control.update_listeners(vec![input.clone()]);
+        } else {
+            control.update_listeners(vec![]);
+        }
+        let deadline = Instant::now() + Duration::from_secs(4);
+        while !control.snapshot().is_empty() {
+            assert!(
+                Instant::now() < deadline,
+                "removed publisher still appears ready"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            !receiver.selection_current(),
+            "removal must invalidate buffered frames"
+        );
+        drop(publisher);
+        if round != 0 {
+            loop {
+                if let Ok(socket) = TcpListener::bind(("127.0.0.1", port)) {
+                    drop(socket);
+                    break;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "removed listener did not release its port"
+                );
+                thread::sleep(Duration::from_millis(10));
+            }
+        }
+        old_token = Some(token);
+        // Discard the removed session's output before the next attachment.
+        while receiver.rx.try_recv().is_ok() {}
+    }
+    drop(receiver);
+}
+
+fn wait_for_ready(control: &crate::LiveIngestControl, id: i32, previous: Option<&str>) -> String {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        if let Some(input) = control.snapshot().into_iter().find(|input| {
+            input.id == id && input.ready && previous.is_none_or(|token| input.session != token)
+        }) {
+            return input.session;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "listener {id} did not become ready"
+        );
+        thread::sleep(Duration::from_millis(1));
+    }
+}
+
+#[test]
+fn manual_relay_drains_standby_and_switches_sources_without_reconnecting() {
+    let control = crate::LiveIngestControl::default();
+    control.configure_automatic([(1, false), (2, false)]);
+    let (first_tx, first_rx) = mpsc::channel();
+    let (second_tx, second_rx) = mpsc::channel();
+    let (output_tx, output_rx) = mpsc::sync_channel(8);
+    let abort = Arc::new(AtomicBool::new(false));
+    let slots = [first_rx, second_rx]
+        .into_iter()
+        .map(|rx| ListenerSlot {
+            config: None,
+            receiver: test_live_receiver(rx),
+            session: None,
+            closed: false,
+            pending_audio: VecDeque::new(),
+            pending_audio_samples: 0,
+        })
+        .collect();
+    let worker_control = control.clone();
+    let worker_abort = abort.clone();
+    let worker = thread::spawn(move || {
+        relay_live_listeners(slots, output_tx, worker_abort, 1, worker_control, None);
+    });
+    for (id, tx) in [(1, &first_tx), (2, &second_tx)] {
+        tx.send(LiveEvent::Started {
+            session_id: 10,
+            has_audio: false,
+            listener_id: id,
+        })
+        .unwrap();
+        tx.send(LiveEvent::Video(10, frame::Video::empty()))
+            .unwrap();
+    }
+    let first = wait_for_ready(&control, 1, None);
+    let second = wait_for_ready(&control, 2, None);
+    assert!(
+        output_rx.try_recv().is_err(),
+        "ready inputs must not go on air automatically"
+    );
+    control.select(1, &first, true).unwrap();
+    let mut fresh = frame::Video::empty();
+    fresh.set_pts(Some(100));
+    first_tx.send(LiveEvent::Video(10, fresh)).unwrap();
+    assert!(matches!(
+        output_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+        LiveEvent::Selection(1)
+    ));
+    assert!(matches!(
+        output_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+        LiveEvent::Started { listener_id: 1, .. }
+    ));
+    assert!(
+        matches!(output_rx.recv_timeout(Duration::from_secs(1)).unwrap(), LiveEvent::Video(_, frame) if frame.pts() == Some(100))
+    );
+    // Two quick clicks may return to the same source before the relay wakes.
+    // Its old output generation must still be replaced, never left frozen.
+    control.select(1, &first, false).unwrap();
+    control.select(1, &first, true).unwrap();
+    assert!(matches!(
+        output_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+        LiveEvent::Ended(_)
+    ));
+    first_tx
+        .send(LiveEvent::Video(10, frame::Video::empty()))
+        .unwrap();
+    assert!(matches!(
+        output_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+        LiveEvent::Selection(3)
+    ));
+    assert!(matches!(
+        output_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+        LiveEvent::Started { listener_id: 1, .. }
+    ));
+    assert!(matches!(
+        output_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+        LiveEvent::Video(..)
+    ));
+    control.select(2, &second, true).unwrap();
+    assert!(matches!(
+        output_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+        LiveEvent::Ended(_)
+    ));
+    second_tx
+        .send(LiveEvent::Video(10, frame::Video::empty()))
+        .unwrap();
+    assert!(matches!(
+        output_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+        LiveEvent::Selection(4)
+    ));
+    assert!(matches!(
+        output_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+        LiveEvent::Started { listener_id: 2, .. }
+    ));
+    assert!(matches!(
+        output_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+        LiveEvent::Video(..)
+    ));
+    control.select(2, &second, false).unwrap();
+    assert!(matches!(
+        output_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+        LiveEvent::Ended(_)
+    ));
+    second_tx
+        .send(LiveEvent::Video(10, frame::Video::empty()))
+        .unwrap();
+    assert!(output_rx.recv_timeout(Duration::from_millis(30)).is_err());
+    second_tx.send(LiveEvent::Ended(10)).unwrap();
+    second_tx
+        .send(LiveEvent::Started {
+            session_id: 11,
+            has_audio: false,
+            listener_id: 2,
+        })
+        .unwrap();
+    second_tx
+        .send(LiveEvent::Video(11, frame::Video::empty()))
+        .unwrap();
+    let reconnected = wait_for_ready(&control, 2, Some(&second));
+    assert_ne!(second, reconnected);
+    assert!(control.select(2, &second, true).is_err());
+    assert!(output_rx.try_recv().is_err());
+    abort.store(true, Ordering::Relaxed);
+    worker.join().unwrap();
+}
+
+#[test]
+fn manual_stop_invalidates_buffered_live_frames_before_they_reach_output() {
+    let (tx, rx) = mpsc::channel();
+    let mut live = test_live_receiver(rx);
+    let playback = crate::PlaybackControl::default();
+    let control = playback.live_ingest();
+    control.configure_automatic([(1, false), (2, false)]);
+    control.started(1, 10, Duration::from_secs(2));
+    control.video(1, 10, Duration::from_secs(2));
+    let session = control.snapshot()[0].session.clone();
+    control.select(1, &session, true).unwrap();
+    live.selection_control = Some(control.clone());
+    live.selection_revision = Some(control.revision());
+    tx.send(LiveEvent::Started {
+        session_id: 1,
+        has_audio: false,
+        listener_id: 1,
+    })
+    .unwrap();
+    tx.send(LiveEvent::Video(1, frame::Video::empty())).unwrap();
+    let mut output = CountingOutput::default();
+    LiveOverrideOutput::new(&mut output, &mut live, &playback)
+        .pump_live()
+        .unwrap();
+    assert!(playback.live_active());
+    let frames = output.video_frames;
+    control.select(1, &session, false).unwrap();
+    tx.send(LiveEvent::Video(1, frame::Video::empty())).unwrap();
+    LiveOverrideOutput::new(&mut output, &mut live, &playback)
+        .pump_live()
+        .unwrap();
+    assert!(!playback.live_active());
+    assert!(live.returned_to_file);
+    LiveOverrideOutput::new(&mut output, &mut live, &playback)
+        .pump_live()
+        .unwrap();
+    assert_eq!(
+        output.video_frames, frames,
+        "old buffered frames must not be encoded after manual stop"
+    );
+}
+
 #[test]
 fn multiple_listeners_select_priority_without_preempting_active_session() {
     let (high_tx, high_rx) = mpsc::channel();
@@ -161,6 +581,7 @@ fn multiple_listeners_select_priority_without_preempting_active_session() {
     let slots = [high_rx, low_rx]
         .into_iter()
         .map(|rx| ListenerSlot {
+            config: None,
             receiver: test_live_receiver(rx),
             session: None,
             closed: false,
@@ -169,7 +590,16 @@ fn multiple_listeners_select_priority_without_preempting_active_session() {
         })
         .collect();
     let relay_abort = Arc::clone(&abort);
-    let relay = thread::spawn(move || relay_live_listeners(slots, out_tx, relay_abort, 1));
+    let relay = thread::spawn(move || {
+        relay_live_listeners(
+            slots,
+            out_tx,
+            relay_abort,
+            1,
+            crate::LiveIngestControl::default(),
+            None,
+        );
+    });
 
     assert!(matches!(
         out_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
@@ -234,6 +664,7 @@ fn blocked_on_air_output_does_not_block_standby_listener() {
     let slots = [test_live_receiver(high_rx), test_live_receiver(low_rx)]
         .into_iter()
         .map(|receiver| ListenerSlot {
+            config: None,
             receiver,
             session: None,
             closed: false,
@@ -242,7 +673,16 @@ fn blocked_on_air_output_does_not_block_standby_listener() {
         })
         .collect();
     let relay_abort = Arc::clone(&abort);
-    let relay = thread::spawn(move || relay_live_listeners(slots, out_tx, relay_abort, 1));
+    let relay = thread::spawn(move || {
+        relay_live_listeners(
+            slots,
+            out_tx,
+            relay_abort,
+            1,
+            crate::LiveIngestControl::default(),
+            None,
+        );
+    });
     let (done_tx, done_rx) = mpsc::channel();
     let standby = thread::spawn(move || {
         if low_tx

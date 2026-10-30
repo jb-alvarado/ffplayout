@@ -6,9 +6,8 @@ use std::{
 };
 
 use ff_engine::{
-    AsyncPlayout, AudioLevelCallback, ClipResult, EncodingConfig, HlsHealth, LiveInputBackend,
-    LiveListenerConfig, LogLevel, LogoConfig, LogoFade, OutputConfig, RecordingConfig,
-    TextOverlayState,
+    AsyncPlayout, AudioLevelCallback, ClipResult, EncodingConfig, HlsHealth, LogLevel, LogoConfig,
+    LogoFade, OutputConfig, RecordingConfig, TextOverlayState,
 };
 use log::*;
 use tokio::time::sleep;
@@ -86,7 +85,19 @@ pub async fn player(manager: ChannelManager) -> Result<(), ServiceError> {
         .output_status
         .supports_live_updates()
         .then(|| crate::moq::watch_demand(manager.clone(), moq_demanded));
-    *manager.playback_control.lock().await = playout.playback_control();
+    {
+        let saved = manager.config.read().await;
+        let mut control = manager.playback_control.lock().await;
+        *control = playout.playback_control();
+        control.live_ingest().configure_automatic(
+            config
+                .ingest
+                .listeners
+                .iter()
+                .chain(&saved.ingest.listeners)
+                .map(|input| (input.id, input.auto_takeover)),
+        );
+    }
     if config.output.mode == OutputMode::Desktop {
         #[cfg(feature = "desktop-cpu")]
         info!(channel = config.general.channel_id;
@@ -98,36 +109,30 @@ pub async fn player(manager: ChannelManager) -> Result<(), ServiceError> {
         );
     }
 
-    let listeners: Vec<_> = config
-        .ingest
-        .listeners
-        .iter()
-        .filter(|input| input.enabled && matches!(input.backend.as_str(), "rtmp" | "srt"))
-        .map(|input| {
-            let backend = if input.backend == "srt" {
-                LiveInputBackend::Srt
-            } else {
-                LiveInputBackend::Rtmp
-            };
-
-            Ok(LiveListenerConfig {
-                id: input.id,
-                priority: input.priority,
-                idle_timeout: manager.live_idle_timeout(input.id, input.idle_timeout_ms)?,
-                backend,
-                url: input.identifier.clone(),
-                options: input.options.clone(),
-                demuxer_options: input.demuxer_options.clone(),
-            })
-        })
-        .collect::<Result<_, ServiceError>>()?;
+    // Attach an empty relay as well, so listeners can be added while playing.
+    let saved = manager.config.read().await;
+    let listeners = manager.live_listener_configs(&saved)?;
     let count = listeners.len();
-
+    ff_engine::set_ingest_log_level(
+        manager.id,
+        saved
+            .logging
+            .ingest_level
+            .parse()
+            .map_err(ServiceError::Conflict)?,
+    );
+    manager
+        .playback_control
+        .lock()
+        .await
+        .live_ingest()
+        .update_listeners(listeners.clone());
+    playout
+        .start_live_listeners(listeners, output_config)
+        .await
+        .map_err(engine_error)?;
+    drop(saved);
     if count > 0 {
-        playout
-            .start_live_listeners(listeners, output_config)
-            .await
-            .map_err(engine_error)?;
         info!(channel = config.general.channel_id; "Started {count} live listener(s)");
     }
 

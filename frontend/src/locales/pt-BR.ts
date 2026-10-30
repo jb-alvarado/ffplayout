@@ -52,6 +52,12 @@ export default {
     control: {
         noClip: 'Nenhum clipe está sendo reproduzido',
         ingest: 'Ingestão ao Vivo',
+        liveNoSignal: 'Sem sinal',
+        liveTake: 'Transmitir ao vivo',
+        liveEnd: 'Encerrar ao vivo',
+        liveSwitching: 'Alternando …',
+        volume: 'Volume',
+        mute: 'Silenciar',
         navigationDisabledLive: 'A navegação da playlist está desativada durante a ingestão ao vivo.',
         unlockControls: 'Desbloquear controles',
         lockControls: 'Bloquear controles',
@@ -323,6 +329,9 @@ export default {
         apply: 'Aplicar',
         volumeApplied: 'Volume aplicado.',
         volumeApplyFailed: 'Falha ao aplicar o volume.',
+        ingestAutoTakeover: 'Colocar esta entrada no ar automaticamente',
+        ingestAutoTakeoverHelp:
+            'Quando desativado, esta entrada fica disponível para seleção na página do player. Alterar esta opção mantém uma transmissão já ativa no ar.',
         ingestHelp: `Receptores RTMP e SRT podem substituir a playlist quando recebem vídeo. Vários receptores podem aguardar ao mesmo tempo; uma transmissão ativa não é interrompida. Use portas diferentes para receptores do mesmo protocolo.`,
         liveListenerEnabled: 'Ativado',
         liveListenerAdd: 'Adicionar receptor',

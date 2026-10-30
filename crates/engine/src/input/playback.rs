@@ -62,14 +62,36 @@ impl<'a, O: FrameOutput> LiveOverrideOutput<'a, O> {
         loop {
             // Check every event too: a busy live queue may never become empty.
             check_playback_control(&self.playback_control)?;
+            if self.live.active && !self.live.selection_current() {
+                self.end_live_session(false)?;
 
-            match self
+                return Ok(received_event);
+            }
+
+            let event = self
                 .live
                 .pending_event
                 .take()
                 .map(Ok)
-                .unwrap_or_else(|| self.live.delay.next_event(&self.live.rx, Instant::now()))
+                .unwrap_or_else(|| self.live.delay.next_event(&self.live.rx, Instant::now()));
+            if matches!(
+                event,
+                Ok(LiveEvent::Started { .. } | LiveEvent::Video(..) | LiveEvent::Audio(..))
+            ) && !self.live.selection_current()
             {
+                continue;
+            }
+
+            match event {
+                Ok(LiveEvent::Selection(revision)) => {
+                    if self.live.active && self.live.selection_revision != Some(revision) {
+                        self.live.pending_event = Some(LiveEvent::Selection(revision));
+                        self.end_live_session(false)?;
+
+                        return Ok(received_event);
+                    }
+                    self.live.selection_revision = Some(revision);
+                }
                 Ok(LiveEvent::Started {
                     session_id,
                     has_audio,
@@ -77,8 +99,14 @@ impl<'a, O: FrameOutput> LiveOverrideOutput<'a, O> {
                 }) => {
                     self.live.session_id = session_id;
                     self.live.listener_id = listener_id;
-                    if let Some(timeout) = self.live.listener_idle_timeouts.get(&listener_id) {
-                        self.live.idle_timeout = timeout.clone();
+                    if let Some(timeout) = self
+                        .live
+                        .selection_control
+                        .as_ref()
+                        .and_then(|control| control.idle_timeout(listener_id))
+                        .or_else(|| self.live.listener_idle_timeouts.get(&listener_id).cloned())
+                    {
+                        self.live.idle_timeout = timeout;
                     }
 
                     self.live.session_output_start_seconds = None;
@@ -163,19 +191,9 @@ impl<'a, O: FrameOutput> LiveOverrideOutput<'a, O> {
                 Ok(LiveEvent::Ended(session_id)) => {
                     if session_id == self.live.session_id {
                         debug!(channel = self.live.channel_id; "live listener #{} ended; switching back to file playback", self.live.listener_id);
+                        self.end_live_session(true)?;
 
-                        if self.live.active {
-                            self.fill_live_gap_since_last_media()?;
-                            self.align_live_pts_to_common_time();
-                            self.prepare_file_resume();
-                            self.live.returned_to_file = true;
-                        }
-
-                        self.live.active = false;
-                        self.live.live_session = None;
-                        self.live.connecting = false;
-                        self.live.last_audio_at = None;
-                        self.clear_pending_audio();
+                        return Ok(received_event);
                     }
                 }
                 Err(TryRecvError::Empty) => return Ok(received_event),
@@ -243,6 +261,24 @@ impl<'a, O: FrameOutput> LiveOverrideOutput<'a, O> {
     fn clear_pending_audio(&mut self) {
         self.live.pending_audio = VecDeque::new();
         self.live.pending_audio_samples = 0;
+    }
+
+    fn end_live_session(&mut self, fill_gap: bool) -> Result<()> {
+        if self.live.active {
+            if fill_gap {
+                self.fill_live_gap_since_last_media()?;
+            }
+            self.align_live_pts_to_common_time();
+            self.prepare_file_resume();
+            self.live.returned_to_file = true;
+        }
+        self.live.active = false;
+        self.live.live_session = None;
+        self.live.connecting = false;
+        self.live.last_audio_at = None;
+        self.clear_pending_audio();
+
+        Ok(())
     }
 
     /// For streams that announced an audio track, wait for actual audio

@@ -21,6 +21,7 @@ struct NavigationState {
 
 #[derive(Debug, Clone, Default)]
 pub struct PlaybackControl {
+    ingest: crate::LiveIngestControl,
     skip_current: Arc<AtomicBool>,
     restart: Arc<AtomicBool>,
     shutdown: Arc<AtomicBool>,
@@ -28,6 +29,10 @@ pub struct PlaybackControl {
 }
 
 impl PlaybackControl {
+    pub fn live_ingest(&self) -> crate::LiveIngestControl {
+        self.ingest.clone()
+    }
+
     pub(crate) fn observe_activity(&self, activity: &Arc<PipelineActivity>) {
         let mut state = self
             .navigation

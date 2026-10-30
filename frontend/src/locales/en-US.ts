@@ -52,6 +52,12 @@ export default {
     control: {
         noClip: 'No clip is playing',
         ingest: 'Live ingest',
+        liveNoSignal: 'No signal',
+        liveTake: 'Go live',
+        liveEnd: 'End live',
+        liveSwitching: 'Switching …',
+        volume: 'Volume',
+        mute: 'Mute',
         navigationDisabledLive: 'Playlist navigation is unavailable during live ingest.',
         unlockControls: 'Unlock controls',
         lockControls: 'Lock controls',
@@ -315,6 +321,9 @@ export default {
         apply: 'Apply',
         volumeApplied: 'Volume applied.',
         volumeApplyFailed: 'Failed to apply volume.',
+        ingestAutoTakeover: 'Automatically put this input on air',
+        ingestAutoTakeoverHelp:
+            'When disabled, this input stays ready until selected on the player page. Changing this setting keeps an existing takeover on air.',
         ingestHelp: `RTMP and SRT listeners can take over the playlist when video arrives. Multiple listeners may wait at once; an active takeover is not pre-empted. Use a distinct port for each listener of the same protocol.`,
         liveListenerEnabled: 'Enabled',
         liveListenerAdd: 'Add listener',

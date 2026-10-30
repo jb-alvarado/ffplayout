@@ -28,6 +28,7 @@ export const usePlaylist = defineStore('playlist', {
         current: {} as PlaylistItem,
         currentIndex: 0,
         ingestRuns: false,
+        ingestInputs: [] as LiveInputStatus[],
         ingestListenerId: null as number | null,
         ingestListenerName: null as string | null,
         ingestListenerBackend: null as string | null,
@@ -94,6 +95,7 @@ export const usePlaylist = defineStore('playlist', {
             this.currentIndex = item.index
             this.elapsedSec = item.elapsed
             this.ingestRuns = item.ingest
+            this.ingestInputs = item.ingest_inputs ?? []
             this.ingestListenerId = item.ingest ? (item.ingest_listener_id ?? null) : null
             this.ingestListenerName = item.ingest ? (item.ingest_listener_name ?? null) : null
             this.ingestListenerBackend = item.ingest ? (item.ingest_listener_backend ?? null) : null
