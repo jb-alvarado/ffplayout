@@ -18,7 +18,6 @@ use log::{debug, info, warn};
 use crate::{
     PlaybackControl,
     audio_mixer::{LiveLoudnessProcessor, TRUE_PEAK_FUTURE_SAMPLES, lookahead_samples},
-    graphics::logo_adapter::LogoOverlay,
     output::FrameOutput,
     playout::check_playback_control,
     utils::ffmpeg::{make_audio_frame_writable, reference_audio_frame, reference_video_frame},
@@ -35,6 +34,7 @@ use super::timestamps::{AudioRecoveryAction, LateAudioRecovery};
 pub(crate) struct LiveOverrideOutput<'a, O: FrameOutput> {
     pub(super) output: &'a mut O,
     pub(super) live: &'a mut LiveReceiver,
+    file_texts: crate::graphics::text_adapter::TextOverlays,
     playback_control: PlaybackControl,
     allow_live_activation: bool,
 }
@@ -48,6 +48,7 @@ impl<'a, O: FrameOutput> LiveOverrideOutput<'a, O> {
         Self {
             output,
             live,
+            file_texts: Default::default(),
             playback_control: playback_control.clone(),
             allow_live_activation: true,
         }
@@ -121,8 +122,9 @@ impl<'a, O: FrameOutput> LiveOverrideOutput<'a, O> {
                     self.live.loudness = None;
                     debug!(channel = self.live.channel_id; "live listener #{} connected; waiting for first video frame", self.live.listener_id);
                 }
-                Ok(LiveEvent::Video(session_id, frame)) => {
+                Ok(LiveEvent::Video(session_id, frame, texts)) => {
                     if session_id == self.live.session_id {
+                        self.live.texts = texts.clone();
                         if !self.live.active {
                             let Some(session) = self
                                 .allow_live_activation
@@ -134,7 +136,8 @@ impl<'a, O: FrameOutput> LiveOverrideOutput<'a, O> {
                             else {
                                 // Preserve the first frame while a previously accepted
                                 // navigation command finishes updating playlist state.
-                                self.live.pending_event = Some(LiveEvent::Video(session_id, frame));
+                                self.live.pending_event =
+                                    Some(LiveEvent::Video(session_id, frame, texts));
 
                                 return Ok(received_event);
                             };
@@ -355,6 +358,7 @@ impl<'a, O: FrameOutput> LiveOverrideOutput<'a, O> {
                 if let Some(last_video_frame) = &last_video_frame {
                     let mut frame = reference_video_frame(last_video_frame)?;
                     frame.set_pts(Some(self.live.video_pts));
+                    self.apply_frame_texts(&mut frame, self.live.last_video_texts.clone())?;
                     self.output.encode_video(&frame)?;
                     self.remember_video_frame(frame, self.live.video_pts);
                 }
@@ -381,6 +385,7 @@ impl<'a, O: FrameOutput> LiveOverrideOutput<'a, O> {
         while fill_pts < next_pts {
             let mut frame = reference_video_frame(&last_video_frame)?;
             frame.set_pts(Some(fill_pts));
+            self.apply_frame_texts(&mut frame, self.live.last_video_texts.clone())?;
             self.output.encode_video(&frame)?;
             self.remember_video_frame(frame, fill_pts);
             fill_pts += 1;
@@ -443,6 +448,19 @@ impl<'a, O: FrameOutput> LiveOverrideOutput<'a, O> {
             return Ok(());
         }
         self.fill_audio_until(next_pts)
+    }
+
+    fn apply_frame_texts(
+        &mut self,
+        frame: &mut frame::Video,
+        texts: crate::graphics::text_adapter::TextOverlays,
+    ) -> Result<()> {
+        if !self.output.retains_text_overlays() && texts.iter().any(Option::is_some) {
+            crate::utils::ffmpeg::make_video_frame_writable(frame)?;
+        }
+        self.output.apply_text_overlays(frame, texts);
+
+        Ok(())
     }
 
     fn remember_video_frame(&mut self, frame: frame::Video, pts: i64) {
@@ -524,11 +542,14 @@ impl<'a, O: FrameOutput> LiveOverrideOutput<'a, O> {
         let pts = pts.max(self.live.video_pts);
         self.fill_video_until(pts)?;
         frame.set_pts(Some(pts));
+        self.live.last_video_texts = self.live.texts.clone();
+        self.apply_frame_texts(&mut frame, self.live.last_video_texts.clone())?;
 
         loop {
             check_playback_control(&self.playback_control)?;
             self.pad_missing_live_audio()?;
 
+            self.output.set_logo_opacity(1.0);
             if self.output.try_encode_video(&frame)? {
                 break;
             }
@@ -792,6 +813,22 @@ pub(super) fn seconds_to_pts(rate: u32, seconds: f64) -> i64 {
 }
 
 impl<O: FrameOutput> FrameOutput for LiveOverrideOutput<'_, O> {
+    fn retains_text_overlays(&self) -> bool {
+        true
+    }
+
+    fn apply_text_overlays(
+        &mut self,
+        _: &mut frame::Video,
+        overlays: crate::graphics::text_adapter::TextOverlays,
+    ) {
+        self.file_texts = overlays;
+    }
+
+    fn set_logo_opacity(&mut self, opacity: f64) {
+        self.output.set_logo_opacity(opacity);
+    }
+
     fn playout_clock(&self) -> Option<crate::clock::SharedPlayoutClock> {
         self.output.playout_clock()
     }
@@ -812,6 +849,8 @@ impl<O: FrameOutput> FrameOutput for LiveOverrideOutput<'_, O> {
         let pts = self.file_video_pts(frame.pts().unwrap_or(self.live.video_pts));
         self.fill_video_until(pts)?;
         frame.set_pts(Some(pts));
+        self.live.last_video_texts = self.file_texts.clone();
+        self.apply_frame_texts(&mut frame, self.live.last_video_texts.clone())?;
         self.output.encode_video(&frame)?;
         self.remember_video_frame(frame, pts);
         self.live.video_pts = pts + 1;
@@ -868,19 +907,6 @@ impl<O: FrameOutput> FrameOutput for LiveOverrideOutput<'_, O> {
         self.live.last_audio_output_end_pts = Some(audio_pts);
 
         Ok(true)
-    }
-
-    fn apply_logo_overlay(
-        &mut self,
-        frame: &mut frame::Video,
-        logo: &LogoOverlay,
-        opacity_factor: f64,
-    ) {
-        self.output.apply_logo_overlay(frame, logo, opacity_factor);
-    }
-
-    fn benchmarks_logo_overlay(&self) -> bool {
-        self.output.benchmarks_logo_overlay()
     }
 
     fn set_video_end(&mut self, video_end_pts: Option<i64>) -> Result<()> {

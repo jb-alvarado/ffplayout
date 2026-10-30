@@ -655,21 +655,41 @@ impl ParallelOutput {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn encode_video(&self, frame: &frame::Video) -> Result<()> {
         self.video_with_logo(frame, None, 0.0)
     }
 
+    #[cfg(test)]
     pub(crate) fn video_with_logo(
         &self,
         frame: &frame::Video,
         logo: Option<Arc<LogoOverlay>>,
         opacity: f64,
     ) -> Result<()> {
+        self.video_with_graphics(frame, logo, opacity, Default::default())
+    }
+
+    pub(crate) fn video_with_graphics(
+        &self,
+        frame: &frame::Video,
+        logo: Option<Arc<LogoOverlay>>,
+        opacity: f64,
+        texts: crate::graphics::text_adapter::TextOverlays,
+    ) -> Result<()> {
         self.pace(frame.pts(), self.video_time_base);
         let mut workers = self.workers.lock().unwrap_or_else(PoisonError::into_inner);
         self.reconcile(&mut workers)?;
-        let consumers = Self::video_consumers(&workers, &logo, opacity);
-        let prepared = ProgramVideo::new(frame, self.compositor.clone(), logo, opacity, consumers)?;
+        let consumers =
+            Self::video_consumers(&workers, &logo, opacity, texts.iter().any(Option::is_some));
+        let prepared = ProgramVideo::with_texts(
+            frame,
+            self.compositor.clone(),
+            logo,
+            opacity,
+            consumers,
+            texts,
+        )?;
 
         self.dispatch_video(&workers, prepared)
     }
@@ -678,9 +698,10 @@ impl ParallelOutput {
         workers: &[DestinationWorker],
         logo: &Option<Arc<LogoOverlay>>,
         opacity: f64,
+        has_text: bool,
     ) -> BTreeMap<(u32, u32), usize> {
         let mut consumers = BTreeMap::new();
-        if logo.is_some() && opacity > 0.0 {
+        if (logo.is_some() && opacity > 0.0) || has_text {
             for resolution in workers
                 .iter()
                 .filter(|worker| !worker.control.cancelled())
@@ -704,20 +725,29 @@ impl ParallelOutput {
         frame: &frame::Video,
         logo: Option<Arc<LogoOverlay>>,
         opacity: f64,
+        texts: crate::graphics::text_adapter::TextOverlays,
     ) -> Result<Arc<ProgramVideo>> {
         let mut workers = self.workers.lock().unwrap_or_else(PoisonError::into_inner);
         if let Err(error) = self.reconcile(&mut workers) {
             // A failed encoded destination must not stop the desktop or recording.
             log::warn!(channel = self.config.channel_id.unwrap_or_default(); "Parallel output update: {error:#}");
         }
-        let mut consumers = Self::video_consumers(&workers, &logo, opacity);
+        let mut consumers =
+            Self::video_consumers(&workers, &logo, opacity, texts.iter().any(Option::is_some));
         // A cache slot is useful only if an encoder also consumes this size.
         // The desktop passes the same prepared pixels directly to recording.
         if let Some(count) = consumers.get_mut(&(frame.width(), frame.height())) {
             *count += 1;
         }
 
-        ProgramVideo::new(frame, self.compositor.clone(), logo, opacity, consumers)
+        ProgramVideo::with_texts(
+            frame,
+            self.compositor.clone(),
+            logo,
+            opacity,
+            consumers,
+            texts,
+        )
     }
 
     #[cfg(feature = "desktop-base")]
@@ -1005,7 +1035,7 @@ mod tests {
         }
         source.set_pts(Some(42));
         let program = output
-            .prepare_desktop_video(&source, Some(logo.clone()), 0.5)
+            .prepare_desktop_video(&source, Some(logo.clone()), 0.5, Default::default())
             .unwrap();
         let desktop = program.frame(320, 180).unwrap();
         // Preparing/trying a desktop frame alone must not advance another output.

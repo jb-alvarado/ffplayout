@@ -13,10 +13,7 @@ mod pipeline;
 use crate::{
     LogoFade, PlaybackControl,
     benchmark::{self, Stage},
-    graphics::{
-        logo_adapter::*,
-        text_adapter::{TextOverlay, TextPreparation, TextTiming},
-    },
+    graphics::text_adapter::{TextOverlay, TextPreparation, TextTiming},
     input::timestamps::LiveTimestampTracker,
     output::FrameOutput,
     utils::{
@@ -1066,9 +1063,9 @@ fn encode_composited_frame<O: FrameOutput>(
     let video_opacity = media_fade_plan.video_opacity_at(timeline.video_pts);
     let changes_pixels = video_frame_needs_write(
         video_opacity,
-        video.logo.is_some() && output.benchmarks_logo_overlay(),
-        video.text.is_some(),
-        video.runtime_text.overlay.is_some(),
+        false,
+        !output.retains_text_overlays() && video.text.is_some(),
+        !output.retains_text_overlays() && video.runtime_text.overlay.is_some(),
     );
 
     if changes_pixels {
@@ -1114,29 +1111,22 @@ fn apply_overlays(
     let opacity = logo_fade_plan.opacity_at(timeline.video_pts, timeline.logo_opacity);
     timeline.logo_opacity = opacity;
 
-    if let Some(logo) = &video.logo {
-        if output.benchmarks_logo_overlay() {
-            benchmark::measure_overlay(Stage::LogoOverlay, logo.width(), logo.height(), || {
-                output.apply_logo_overlay(frame, logo, opacity);
-            });
-        } else {
-            output.apply_logo_overlay(frame, logo, opacity);
-        }
-    }
+    output.set_logo_opacity(opacity);
 
-    if let Some(text) = &mut video.text {
-        let (width, height) = text.dimensions();
-        benchmark::measure_overlay(Stage::TextStatic, width, height, || {
-            text.blend(frame, timeline.video_pts, timeline.text_pts);
-        });
-    }
-
-    if let Some(text) = &mut video.runtime_text.overlay {
-        let (width, height) = text.dimensions();
-        benchmark::measure_overlay(Stage::TextRuntime, width, height, || {
-            text.blend(frame, timeline.video_pts, timeline.text_pts);
-        });
-    }
+    output.apply_text_overlays(
+        frame,
+        [
+            video
+                .text
+                .as_ref()
+                .and_then(|text| text.snapshot(timeline.video_pts, timeline.text_pts)),
+            video
+                .runtime_text
+                .overlay
+                .as_ref()
+                .and_then(|text| text.snapshot(timeline.video_pts, timeline.text_pts)),
+        ],
+    );
 
     timeline.text_pts += 1;
 }
@@ -1570,7 +1560,6 @@ struct VideoDecoder {
     scaled_height: u32,
     x_offset: u32,
     y_offset: u32,
-    logo: Option<LogoOverlay>,
     text: Option<TextOverlay>,
     runtime_text: RuntimeTextOverlay,
     frame_rate_converter: FrameRateConverter,
@@ -1646,11 +1635,6 @@ impl VideoDecoder {
             scaled_height: cfg.height,
             x_offset: 0,
             y_offset: 0,
-            logo: cfg
-                .logo
-                .as_ref()
-                .map(|logo| LogoOverlay::load(logo, cfg.width, cfg.height))
-                .transpose()?,
             text: cfg
                 .text
                 .as_ref()
@@ -2347,7 +2331,7 @@ fn write_black_frames<O: FrameOutput>(
         let mut black = black_video_frame_for_config(cfg);
 
         if let Some(overlays) = overlays.as_mut() {
-            overlays.apply(&mut black, timeline);
+            overlays.apply(&mut black, timeline, output);
         }
         black.set_pts(Some(timeline.video_pts));
         output.set_frame_timeline(timeline);
@@ -2405,15 +2389,26 @@ impl FallbackOverlays {
         })
     }
 
-    fn apply(&mut self, frame: &mut frame::Video, timeline: &mut Timeline) {
-        if let Some(text) = &mut self.text {
-            text.blend(frame, timeline.video_pts, timeline.text_pts);
-        }
+    fn apply<O: FrameOutput>(
+        &mut self,
+        frame: &mut frame::Video,
+        timeline: &mut Timeline,
+        output: &mut O,
+    ) {
         self.runtime_text
             .update(timeline.video_pts, timeline.text_pts);
-        if let Some(text) = &mut self.runtime_text.overlay {
-            text.blend(frame, timeline.video_pts, timeline.text_pts);
-        }
+        output.apply_text_overlays(
+            frame,
+            [
+                self.text
+                    .as_ref()
+                    .and_then(|text| text.snapshot(timeline.video_pts, timeline.text_pts)),
+                self.runtime_text
+                    .overlay
+                    .as_ref()
+                    .and_then(|text| text.snapshot(timeline.video_pts, timeline.text_pts)),
+            ],
+        );
 
         timeline.text_pts += 1;
     }
@@ -2428,8 +2423,8 @@ fn write_padding_video_frames<O: FrameOutput>(
 ) -> Result<()> {
     if let Some(last_video_frame) = last_video_frame {
         for _ in 0..frames {
-            // The frame is already fully composited. Padding only changes its
-            // header PTS, so all duplicates can safely share the pixel buffer.
+            // Retained text placement stays frozen while the program logo continues
+            // on the output timeline. Duplicates share the source pixel buffer.
             let mut frame = reference_video_frame(last_video_frame)?;
             frame.set_pts(Some(timeline.video_pts));
             output.set_frame_timeline(timeline);

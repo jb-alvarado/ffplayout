@@ -6,6 +6,7 @@ pub mod blend;
 #[cfg(feature = "ffmpeg")]
 pub mod ffmpeg;
 pub mod layout;
+pub mod source;
 pub mod style;
 pub mod text;
 

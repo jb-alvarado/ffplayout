@@ -5,7 +5,7 @@ use ffmpeg_next::{Rational, Rescale, frame};
 
 use crate::{
     benchmark::{self, Stage},
-    graphics::logo_adapter::LogoOverlay,
+    graphics::text_adapter::TextOverlays,
     output::FrameOutput,
     utils::{
         config::OutputConfig,
@@ -26,7 +26,7 @@ pub(crate) struct ProgramAudioState {
 }
 
 enum PendingFrame {
-    Video(frame::Video),
+    Video(frame::Video, f64, TextOverlays),
     Audio {
         frame: frame::Audio,
         live: bool,
@@ -49,6 +49,8 @@ pub(crate) struct ProgramAudioOutput<'a, O> {
     video_decoded: bool,
     video_finished: bool,
     last_audio_source: Option<bool>,
+    logo_opacity: f64,
+    text_overlays: TextOverlays,
 }
 
 impl<'a, O: FrameOutput> ProgramAudioOutput<'a, O> {
@@ -88,7 +90,28 @@ impl<'a, O: FrameOutput> ProgramAudioOutput<'a, O> {
             video_decoded: false,
             video_finished: false,
             last_audio_source: None,
+            logo_opacity: 1.0,
+            text_overlays: Default::default(),
         })
+    }
+
+    fn submit_video(
+        &mut self,
+        video: &frame::Video,
+        opacity: f64,
+        texts: TextOverlays,
+    ) -> Result<()> {
+        self.output.set_logo_opacity(opacity);
+        if self.output.retains_text_overlays() {
+            self.output.set_text_overlays(texts);
+        } else if texts.iter().any(Option::is_some) {
+            let mut video = reference_video_frame(video)?;
+            crate::utils::ffmpeg::make_video_frame_writable(&mut video)?;
+            self.output.apply_text_overlays(&mut video, texts);
+            return self.output.encode_video(&video);
+        }
+
+        self.output.encode_video(video)
     }
 
     fn queue_audio(&mut self, audio: &frame::Audio, live: bool, hold_gain: bool) -> Result<()> {
@@ -121,7 +144,7 @@ impl<'a, O: FrameOutput> ProgramAudioOutput<'a, O> {
 
         while let Some(front) = self.pending.front() {
             let (samples, end) = match front {
-                PendingFrame::Video(video) => (
+                PendingFrame::Video(video, ..) => (
                     0,
                     video
                         .pts()
@@ -144,7 +167,9 @@ impl<'a, O: FrameOutput> ProgramAudioOutput<'a, O> {
             }
 
             match self.pending.pop_front() {
-                Some(PendingFrame::Video(video)) => self.output.encode_video(&video)?,
+                Some(PendingFrame::Video(video, opacity, texts)) => {
+                    self.submit_video(&video, opacity, texts)?;
+                }
                 Some(PendingFrame::Audio {
                     mut frame,
                     live,
@@ -158,7 +183,7 @@ impl<'a, O: FrameOutput> ProgramAudioOutput<'a, O> {
                             .iter()
                             .filter_map(|pending| match pending {
                                 PendingFrame::Audio { frame, live, .. } => Some((frame, *live)),
-                                PendingFrame::Video(_) => None,
+                                PendingFrame::Video(..) => None,
                             })
                             .take_while(|(_, live)| self.scope != LoudnessScope::Live || *live)
                             .map(|(frame, _)| frame);
@@ -241,7 +266,7 @@ impl<O: FrameOutput> FrameOutput for ProgramAudioOutput<'_, O> {
 
     fn encode_video(&mut self, video: &frame::Video) -> Result<()> {
         if self.scope == LoudnessScope::Off {
-            return self.output.encode_video(video);
+            return self.submit_video(video, self.logo_opacity, self.text_overlays.clone());
         }
 
         self.latest_video_sample = self.latest_video_sample.max(
@@ -250,8 +275,11 @@ impl<O: FrameOutput> FrameOutput for ProgramAudioOutput<'_, O> {
                 .unwrap_or_default()
                 .rescale(self.video_time_base, Rational(1, self.sample_rate as i32)),
         );
-        self.pending
-            .push_back(PendingFrame::Video(reference_video_frame(video)?));
+        self.pending.push_back(PendingFrame::Video(
+            reference_video_frame(video)?,
+            self.logo_opacity,
+            self.text_overlays.clone(),
+        ));
         self.drain(false)
     }
 
@@ -268,12 +296,20 @@ impl<O: FrameOutput> FrameOutput for ProgramAudioOutput<'_, O> {
         self.output.reset_after_skip(video_pts, audio_pts)
     }
 
-    fn apply_logo_overlay(&mut self, frame: &mut frame::Video, logo: &LogoOverlay, opacity: f64) {
-        self.output.apply_logo_overlay(frame, logo, opacity);
+    fn set_text_overlays(&mut self, overlays: TextOverlays) {
+        self.text_overlays = overlays;
     }
 
-    fn benchmarks_logo_overlay(&self) -> bool {
-        self.output.benchmarks_logo_overlay()
+    fn retains_text_overlays(&self) -> bool {
+        true
+    }
+
+    fn apply_text_overlays(&mut self, _: &mut frame::Video, overlays: TextOverlays) {
+        self.text_overlays = overlays;
+    }
+
+    fn set_logo_opacity(&mut self, opacity: f64) {
+        self.logo_opacity = opacity;
     }
 
     fn set_video_end(&mut self, end: Option<i64>) -> Result<()> {
@@ -591,6 +627,7 @@ mod tests {
                 let result = crate::play_program_clip(
                     &mut capture,
                     &mut state,
+                    &mut crate::graphics::source::ProgramGraphicsState::default(),
                     &mut None,
                     path.to_str().unwrap(),
                     &config,

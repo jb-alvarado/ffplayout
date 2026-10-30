@@ -306,7 +306,8 @@ export default {
         logDetect: 'Logs an error message if the audio line is silent for 15 seconds during the validation process.',
         logIgnore: 'Ignore strings that contain matched lines; the format is a semicolon-separated list.',
         processingHelp: 'Default processing for all clips ensures uniqueness.',
-        processingLogoPath: 'The logo is used only if the path exists; the path is relative to the storage folder.',
+        processingLogoPath:
+            'Path relative to the storage folder. Static images, animated GIFs and local videos can be used as logos. Animations repeat indefinitely; video audio is ignored.',
         processingLogoScale: `Leave logo scale blank if no scaling is needed. The format is 'width:height', for example: '100:-1' or '12%:-1' for proportional scaling.`,
         processingLogoPosition: `Position is specified in the format 'x:y'`,
         processingAudioTracks: 'Specify how many audio tracks should be processed.',

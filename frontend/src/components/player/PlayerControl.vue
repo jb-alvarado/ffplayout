@@ -577,12 +577,12 @@ function runControl(button: PlayerControlButton) {
                     <div class="flex items-center justify-center">
                         <button
                             type="button"
-                            class="btn btn-ghost btn-xs p-0 flex items-center justify-center text-base"
+                            class="btn btn-ghost btn-xs px-0.5 pt-1 flex items-center justify-center text-base"
                             :disabled="!controlsUnlocked"
                             :aria-label="t('control.mute')"
                             @click="muteAudio"
                         >
-                            <i class="text-xl" :class="volumeIcon()" />
+                            <i class="block text-xl before:align-baseline" :class="volumeIcon()" />
                         </button>
                         <span class="w-7 text-center text-xs tabular-nums">{{ volumeLevel.toFixed(2) }}</span>
                     </div>

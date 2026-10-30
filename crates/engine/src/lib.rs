@@ -106,6 +106,7 @@ pub struct Playout {
     config: OutputConfig,
     output: Output,
     program_audio: ProgramAudioState,
+    program_graphics: graphics::source::ProgramGraphicsState,
     timeline: Timeline,
     fallback_duration: f64,
     playback_control: PlaybackControl,
@@ -617,6 +618,7 @@ impl Playout {
             config,
             output,
             program_audio: ProgramAudioState::default(),
+            program_graphics: graphics::source::ProgramGraphicsState::default(),
             timeline: Timeline::new(),
             fallback_duration,
             playback_control: PlaybackControl::default(),
@@ -779,6 +781,7 @@ impl Playout {
             let path = path.to_string();
             let mut live_for_worker = live.take();
             let mut program_audio = std::mem::take(&mut self.program_audio);
+            let mut program_graphics = std::mem::take(&mut self.program_graphics);
             let benchmark = benchmark::start(config.channel_id);
 
             if let Some(live) = live_for_worker.as_ref() {
@@ -789,6 +792,7 @@ impl Playout {
                 let result = play_program_clip(
                     output,
                     &mut program_audio,
+                    &mut program_graphics,
                     &mut live_for_worker,
                     &path,
                     &config,
@@ -809,12 +813,19 @@ impl Playout {
                 {
                     live.reanchor_timeline(&mut timeline);
                 }
-                (result, timeline, live_for_worker, program_audio)
+                (
+                    result,
+                    timeline,
+                    live_for_worker,
+                    program_audio,
+                    program_graphics,
+                )
             });
 
             return match operation {
-                Ok((result, timeline, live_for_worker, program_audio)) => {
+                Ok((result, timeline, live_for_worker, program_audio, program_graphics)) => {
                     self.program_audio = program_audio;
+                    self.program_graphics = program_graphics;
                     self.timeline = timeline;
                     *live = live_for_worker;
                     result
@@ -829,6 +840,7 @@ impl Playout {
         let result = play_program_clip(
             &mut self.output,
             &mut self.program_audio,
+            &mut self.program_graphics,
             live,
             path,
             &self.config,
@@ -877,6 +889,7 @@ fn init_ffmpeg(config: &OutputConfig) -> Result<()> {
 fn play_program_clip<O: FrameOutput>(
     output: &mut O,
     state: &mut ProgramAudioState,
+    graphics: &mut graphics::source::ProgramGraphicsState,
     live: &mut Option<LiveReceiver>,
     path: &str,
     config: &OutputConfig,
@@ -885,7 +898,8 @@ fn play_program_clip<O: FrameOutput>(
     playback_control: &PlaybackControl,
     options: PlayOptions<'_>,
 ) -> Result<ClipResult> {
-    let mut output = ProgramAudioOutput::new(output, state, config)?;
+    let mut graphics = graphics::program::ProgramGraphicsOutput::new(output, graphics, config);
+    let mut output = ProgramAudioOutput::new(&mut graphics, state, config)?;
     let result = if let Some(live) = live.as_mut() {
         let mut live_output = LiveOverrideOutput::new(&mut output, live, playback_control);
         play_to_output(

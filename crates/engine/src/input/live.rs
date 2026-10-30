@@ -197,6 +197,8 @@ impl Drop for LiveReaderPermit {
 }
 
 pub struct LiveReceiver {
+    pub(super) last_video_texts: crate::graphics::text_adapter::TextOverlays,
+    pub(super) texts: crate::graphics::text_adapter::TextOverlays,
     pub(super) selection_control: Option<LiveIngestControl>,
     pub(super) selection_revision: Option<u64>,
     pub(super) rx: Receiver<LiveEvent>,
@@ -301,7 +303,11 @@ pub(super) enum LiveEvent {
         has_audio: bool,
         listener_id: i32,
     },
-    Video(u64, frame::Video),
+    Video(
+        u64,
+        frame::Video,
+        crate::graphics::text_adapter::TextOverlays,
+    ),
     Audio(u64, frame::Audio),
     Ended(u64),
 }
@@ -533,7 +539,7 @@ pub(super) fn relay_live_listeners(
                         listener.clear_pending_audio();
                         None
                     }
-                    LiveEvent::Video(session_id, frame) => {
+                    LiveEvent::Video(session_id, frame, texts) => {
                         if let Some((candidate, _, id)) = listener.session
                             && candidate == session_id
                         {
@@ -568,7 +574,7 @@ pub(super) fn relay_live_listeners(
                             // source PTS still aligns the audio afterwards,
                             // while the first visible frame is not delayed by
                             // a long buffered audio-only lead-in.
-                            pending_output.push_back(LiveEvent::Video(next_session, frame));
+                            pending_output.push_back(LiveEvent::Video(next_session, frame, texts));
 
                             for audio in listener.pending_audio.drain(..) {
                                 pending_output.push_back(LiveEvent::Audio(next_session, audio));
@@ -581,7 +587,9 @@ pub(super) fn relay_live_listeners(
                                 .filter(|(active, source_session, _)| {
                                     *active == index && *source_session == session_id
                                 })
-                                .map(|(_, _, relay_session)| LiveEvent::Video(relay_session, frame))
+                                .map(|(_, _, relay_session)| {
+                                    LiveEvent::Video(relay_session, frame, texts)
+                                })
                         }
                     }
                     LiveEvent::Audio(session_id, frame) => {
@@ -812,6 +820,8 @@ impl LiveReceiver {
         cfg: &OutputConfig,
     ) -> Self {
         Self {
+            texts: Default::default(),
+            last_video_texts: Default::default(),
             selection_control: None,
             selection_revision: None,
             rx,
@@ -881,6 +891,7 @@ impl LiveReceiver {
 }
 
 pub(super) struct LiveFrameSender {
+    pub(super) texts: crate::graphics::text_adapter::TextOverlays,
     pub(super) tx: SyncSender<LiveEvent>,
     pub(super) session_id: u64,
     pub(super) diagnostics: Arc<LiveInputDiagnostics>,
@@ -894,7 +905,7 @@ impl LiveFrameSender {
     /// the RTMP reader instead of dropping frames, but the retry loop keeps
     /// checking abort flags so shutdown/restart cannot hang on a blocked send.
     pub(super) fn send_frame(&mut self, event: LiveEvent) -> Result<()> {
-        if matches!(&event, LiveEvent::Video(_, _)) {
+        if matches!(&event, LiveEvent::Video(_, _, _)) {
             self.diagnostics.video_frame_ready();
         }
         self.diagnostics.frame_ready();
@@ -913,6 +924,18 @@ impl LiveFrameSender {
 }
 
 impl FrameOutput for LiveFrameSender {
+    fn retains_text_overlays(&self) -> bool {
+        true
+    }
+
+    fn apply_text_overlays(
+        &mut self,
+        _: &mut frame::Video,
+        texts: crate::graphics::text_adapter::TextOverlays,
+    ) {
+        self.texts = texts;
+    }
+
     fn input_diagnostics_handle(&self) -> Option<Arc<LiveInputDiagnostics>> {
         Some(self.diagnostics.clone())
     }
@@ -929,6 +952,7 @@ impl FrameOutput for LiveFrameSender {
         self.send_frame(LiveEvent::Video(
             self.session_id,
             reference_video_frame(frame)?,
+            self.texts.clone(),
         ))
         .context("failed to send live video frame")
     }
@@ -1030,6 +1054,7 @@ fn run_live_listener(
 
                 let (done_tx, done_rx) = mpsc::sync_channel(1);
                 let mut output = LiveFrameSender {
+                    texts: Default::default(),
                     tx: tx.clone(),
                     session_id,
                     diagnostics,

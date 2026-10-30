@@ -8,7 +8,10 @@ use anyhow::Result;
 use ffmpeg_next::{format::Pixel, frame, software::scaling};
 
 use crate::{
-    graphics::logo_adapter::{LogoOverlay, blend_logo},
+    graphics::{
+        logo_adapter::{LogoOverlay, blend_logo},
+        text_adapter::TextOverlays,
+    },
     utils::ffmpeg::{make_video_frame_writable, reference_video_frame},
 };
 
@@ -21,6 +24,7 @@ pub(super) struct VideoCompositor {
 }
 
 struct ResolutionCompositor {
+    text_cache: [ff_graphics::ffmpeg::text::TextScaleCache; 2],
     scaler: Option<scaling::Context>,
     frame: frame::Video,
     source_logo: Option<Arc<LogoOverlay>>,
@@ -49,6 +53,7 @@ impl VideoCompositor {
             .entry(resolution)
             .or_insert_with(|| {
                 Arc::new(Mutex::new(ResolutionCompositor {
+                    text_cache: Default::default(),
                     scaler: None,
                     frame: frame::Video::empty(),
                     source_logo: None,
@@ -64,24 +69,36 @@ impl ResolutionCompositor {
     fn prepare(
         &mut self,
         source: &frame::Video,
-        logo: &Arc<LogoOverlay>,
+        logo: Option<&Arc<LogoOverlay>>,
+        texts: &TextOverlays,
         opacity: f64,
         (width, height): Resolution,
     ) -> Result<frame::Video> {
-        if !self
-            .source_logo
-            .as_ref()
-            .is_some_and(|previous| Arc::ptr_eq(previous, logo))
-        {
-            self.logo = Some(logo.positioned(self.position.as_deref(), width, height)?);
-            self.source_logo = Some(logo.clone());
+        if let Some(logo) = logo {
+            if !self
+                .source_logo
+                .as_ref()
+                .is_some_and(|previous| Arc::ptr_eq(previous, logo))
+            {
+                self.logo = Some(logo.positioned(self.position.as_deref(), width, height)?);
+                self.source_logo = Some(logo.clone());
+            }
+        } else {
+            self.logo = None;
+            self.source_logo = None;
         }
-
         if source.width() == width && source.height() == height {
             let mut prepared = reference_video_frame(source)?;
             make_video_frame_writable(&mut prepared)?;
             if let Some(logo) = &self.logo {
                 blend_logo(&mut prepared, logo, opacity);
+            }
+            for (index, (text, cache)) in texts.iter().zip(&mut self.text_cache).enumerate() {
+                if let Some(text) = text {
+                    crate::graphics::text_adapter::measure_text(index, text, || {
+                        text.blend_scaled(&mut prepared, (source.width(), source.height()), cache)
+                    })?;
+                }
             }
 
             return Ok(prepared);
@@ -114,6 +131,13 @@ impl ResolutionCompositor {
         if let Some(logo) = &self.logo {
             blend_logo(&mut self.frame, logo, opacity);
         }
+        for (index, (text, cache)) in texts.iter().zip(&mut self.text_cache).enumerate() {
+            if let Some(text) = text {
+                crate::graphics::text_adapter::measure_text(index, text, || {
+                    text.blend_scaled(&mut self.frame, (source.width(), source.height()), cache)
+                })?;
+            }
+        }
 
         reference_video_frame(&self.frame)
     }
@@ -125,6 +149,7 @@ pub(super) struct ProgramVideo {
     compositor: Arc<Mutex<VideoCompositor>>,
     logo: Option<Arc<LogoOverlay>>,
     opacity: f64,
+    texts: TextOverlays,
     prepared: BTreeMap<Resolution, Mutex<PreparedFrame>>,
 }
 
@@ -134,10 +159,12 @@ struct PreparedFrame {
 }
 
 impl ProgramVideo {
-    pub(super) fn has_visible_logo(&self) -> bool {
-        self.opacity > 0.0 && self.logo.as_ref().is_some_and(|logo| logo.opacity() > 0)
+    pub(super) fn has_visible_graphics(&self) -> bool {
+        (self.opacity > 0.0 && self.logo.as_ref().is_some_and(|logo| logo.opacity() > 0))
+            || self.texts.iter().any(Option::is_some)
     }
 
+    #[cfg(test)]
     pub(super) fn new(
         source: &frame::Video,
         compositor: Arc<Mutex<VideoCompositor>>,
@@ -145,11 +172,30 @@ impl ProgramVideo {
         opacity: f64,
         consumers: BTreeMap<Resolution, usize>,
     ) -> Result<Arc<Self>> {
+        Self::with_texts(
+            source,
+            compositor,
+            logo,
+            opacity,
+            consumers,
+            Default::default(),
+        )
+    }
+
+    pub(super) fn with_texts(
+        source: &frame::Video,
+        compositor: Arc<Mutex<VideoCompositor>>,
+        logo: Option<Arc<LogoOverlay>>,
+        opacity: f64,
+        consumers: BTreeMap<Resolution, usize>,
+        texts: TextOverlays,
+    ) -> Result<Arc<Self>> {
         Ok(Arc::new(Self {
             source: reference_video_frame(source)?,
             compositor,
             logo,
             opacity,
+            texts,
             prepared: consumers
                 .into_iter()
                 .filter(|(_, remaining)| *remaining > 1)
@@ -167,14 +213,13 @@ impl ProgramVideo {
     }
 
     pub(super) fn frame(&self, width: u32, height: u32) -> Result<frame::Video> {
-        let Some(logo) = self
+        let logo = self
             .logo
             .as_ref()
-            .filter(|logo| self.opacity > 0.0 && logo.opacity() > 0)
-        else {
-            // Preserve the encoder's direct YUV/NV12 conversion without a visible logo.
+            .filter(|logo| self.opacity > 0.0 && logo.opacity() > 0);
+        if logo.is_none() && self.texts.iter().all(Option::is_none) {
             return reference_video_frame(&self.source);
-        };
+        }
         let key = (width, height);
         let Some(slot) = self.prepared.get(&key) else {
             return self.prepare(logo, key);
@@ -202,7 +247,11 @@ impl ProgramVideo {
         Ok(result)
     }
 
-    fn prepare(&self, logo: &Arc<LogoOverlay>, resolution: Resolution) -> Result<frame::Video> {
+    fn prepare(
+        &self,
+        logo: Option<&Arc<LogoOverlay>>,
+        resolution: Resolution,
+    ) -> Result<frame::Video> {
         // Hold the map lock only for lookup; scaling at different resolutions
         // must not serialize otherwise independent encoding groups.
         let compositor = self
@@ -213,7 +262,7 @@ impl ProgramVideo {
         compositor
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .prepare(&self.source, logo, self.opacity, resolution)
+            .prepare(&self.source, logo, &self.texts, self.opacity, resolution)
     }
 }
 
@@ -310,6 +359,100 @@ mod tests {
         let compositor = Arc::new(Mutex::new(VideoCompositor::new(Some(config.position))));
 
         (source, logo, compositor)
+    }
+
+    #[test]
+    fn text_is_above_logo_at_each_resolution_and_snapshots_remain_immutable() {
+        use ff_graphics::{
+            animation::TextPreparation,
+            ffmpeg::text::{TextOverlay, TextScaleCache},
+            style::{TextPosition, TextStyle},
+        };
+        let (source, logo, compositor) = setup();
+        let overlay = TextOverlay::prepare(
+            &TextStyle {
+                font_size: 36.0,
+                position_x: TextPosition::End(0),
+                position_y: TextPosition::End(0),
+                ..TextStyle::default()
+            },
+            "MMMMMMMM",
+            TextPreparation {
+                canvas_width: 320,
+                canvas_height: 180,
+                frames_per_second: 25,
+                timing: Default::default(),
+            },
+        )
+        .unwrap()
+        .unwrap();
+        let texts = [overlay.snapshot(0, 0), None];
+        let program = ProgramVideo::with_texts(
+            &source,
+            compositor.clone(),
+            Some(logo.clone()),
+            1.0,
+            BTreeMap::new(),
+            texts.clone(),
+        )
+        .unwrap();
+        assert!(program.has_visible_graphics());
+        for (width, height) in [(320, 180), (160, 90)] {
+            let actual = program.frame(width, height).unwrap();
+            let mut expected = frame::Video::new(Pixel::YUV420P, width, height);
+            for plane in 0..3 {
+                expected.data_mut(plane).fill(128);
+            }
+            let positioned = logo.positioned(Some("W-w-8:H-h-8"), width, height).unwrap();
+            blend_logo(&mut expected, &positioned, 1.0);
+            texts[0]
+                .as_ref()
+                .unwrap()
+                .blend_scaled(&mut expected, (320, 180), &mut TextScaleCache::default())
+                .unwrap();
+            let mut reversed = frame::Video::new(Pixel::YUV420P, width, height);
+            for plane in 0..3 {
+                reversed.data_mut(plane).fill(128);
+            }
+            texts[0]
+                .as_ref()
+                .unwrap()
+                .blend_scaled(&mut reversed, (320, 180), &mut TextScaleCache::default())
+                .unwrap();
+            blend_logo(&mut reversed, &positioned, 1.0);
+            assert_ne!(
+                expected.data(0),
+                reversed.data(0),
+                "test layers must overlap"
+            );
+            for plane in 0..3 {
+                for row in 0..actual.plane_height(plane) as usize {
+                    let columns = actual.plane_width(plane) as usize;
+                    assert_eq!(
+                        &actual.data(plane)
+                            [row * actual.stride(plane)..row * actual.stride(plane) + columns],
+                        &expected.data(plane)
+                            [row * expected.stride(plane)..row * expected.stride(plane) + columns]
+                    );
+                }
+            }
+        }
+        let hidden = ProgramVideo::with_texts(
+            &source,
+            compositor.clone(),
+            None,
+            0.0,
+            BTreeMap::new(),
+            Default::default(),
+        )
+        .unwrap();
+        assert!(!hidden.has_visible_graphics());
+        assert_eq!(hidden.frame(320, 180).unwrap().data(0), source.data(0));
+        let text_only =
+            ProgramVideo::with_texts(&source, compositor, None, 0.0, BTreeMap::new(), texts)
+                .unwrap();
+        assert!(text_only.has_visible_graphics());
+        assert_ne!(text_only.frame(320, 180).unwrap().data(0), source.data(0));
     }
 
     #[test]

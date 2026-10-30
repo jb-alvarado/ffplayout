@@ -1,15 +1,23 @@
 //! Engine adapter: retain media I/O policy while graphics owns logo preparation/layout.
-use anyhow::{Context, Result, ensure};
+use std::sync::Arc;
+
+use anyhow::Result;
+#[cfg(test)]
+use anyhow::{Context, ensure};
 use ffmpeg_next::frame;
 
-use ff_graphics::{ffmpeg::logo::LogoOverlay as PreparedLogoOverlay, style::LogoStyle};
+use ff_graphics::ffmpeg::logo::LogoOverlay as PreparedLogoOverlay;
+#[cfg(test)]
+use ff_graphics::style::LogoStyle;
 
+#[cfg(test)]
 use crate::utils::{config::LogoConfig, helper::open_media_input};
 
 #[derive(Clone)]
-pub struct LogoOverlay(PreparedLogoOverlay);
+pub struct LogoOverlay(pub(super) Arc<PreparedLogoOverlay>);
 
 impl LogoOverlay {
+    #[cfg(test)]
     pub fn load(config: &LogoConfig, width: u32, height: u32) -> Result<Self> {
         let style = LogoStyle {
             scale: config.scale.clone(),
@@ -22,7 +30,8 @@ impl LogoOverlay {
         );
         let input = open_media_input(&config.path)
             .with_context(|| format!("failed to open logo {}", config.path))?;
-        PreparedLogoOverlay::from_input(&style, input, &config.path, width, height).map(Self)
+        PreparedLogoOverlay::from_input(&style, input, &config.path, width, height)
+            .map(|logo| Self(Arc::new(logo)))
     }
 
     pub fn width(&self) -> u32 {
@@ -48,7 +57,9 @@ impl LogoOverlay {
         width: u32,
         height: u32,
     ) -> Result<Self> {
-        self.0.positioned(position, width, height).map(Self)
+        self.0
+            .positioned(position, width, height)
+            .map(|logo| Self(Arc::new(logo)))
     }
 }
 

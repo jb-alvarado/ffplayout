@@ -97,6 +97,8 @@ impl FrameOutput for CountingOutput {
 
 fn test_live_receiver(rx: mpsc::Receiver<LiveEvent>) -> LiveReceiver {
     LiveReceiver {
+        last_video_texts: Default::default(),
+        texts: Default::default(),
         selection_control: None,
         selection_revision: None,
         rx,
@@ -176,7 +178,11 @@ fn live_listener_updates_preserve_active_source_and_invalidate_only_when_removed
         benchmark: Arc::new(Mutex::new(None)),
     };
     let mut selected = Some((0, 10, 99));
-    let mut pending = VecDeque::from([LiveEvent::Video(99, frame::Video::empty())]);
+    let mut pending = VecDeque::from([LiveEvent::Video(
+        99,
+        frame::Video::empty(),
+        Default::default(),
+    )]);
     super::live::update_listener_slots(
         &mut slots,
         vec![listener_config(1, 0), listener_config(2, 100)],
@@ -419,8 +425,12 @@ fn manual_relay_drains_standby_and_switches_sources_without_reconnecting() {
             listener_id: id,
         })
         .unwrap();
-        tx.send(LiveEvent::Video(10, frame::Video::empty()))
-            .unwrap();
+        tx.send(LiveEvent::Video(
+            10,
+            frame::Video::empty(),
+            Default::default(),
+        ))
+        .unwrap();
     }
     let first = wait_for_ready(&control, 1, None);
     let second = wait_for_ready(&control, 2, None);
@@ -431,7 +441,9 @@ fn manual_relay_drains_standby_and_switches_sources_without_reconnecting() {
     control.select(1, &first, true).unwrap();
     let mut fresh = frame::Video::empty();
     fresh.set_pts(Some(100));
-    first_tx.send(LiveEvent::Video(10, fresh)).unwrap();
+    first_tx
+        .send(LiveEvent::Video(10, fresh, Default::default()))
+        .unwrap();
     assert!(matches!(
         output_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
         LiveEvent::Selection(1)
@@ -441,7 +453,7 @@ fn manual_relay_drains_standby_and_switches_sources_without_reconnecting() {
         LiveEvent::Started { listener_id: 1, .. }
     ));
     assert!(
-        matches!(output_rx.recv_timeout(Duration::from_secs(1)).unwrap(), LiveEvent::Video(_, frame) if frame.pts() == Some(100))
+        matches!(output_rx.recv_timeout(Duration::from_secs(1)).unwrap(), LiveEvent::Video(_, frame, _) if frame.pts() == Some(100))
     );
     // Two quick clicks may return to the same source before the relay wakes.
     // Its old output generation must still be replaced, never left frozen.
@@ -452,7 +464,11 @@ fn manual_relay_drains_standby_and_switches_sources_without_reconnecting() {
         LiveEvent::Ended(_)
     ));
     first_tx
-        .send(LiveEvent::Video(10, frame::Video::empty()))
+        .send(LiveEvent::Video(
+            10,
+            frame::Video::empty(),
+            Default::default(),
+        ))
         .unwrap();
     assert!(matches!(
         output_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
@@ -472,7 +488,11 @@ fn manual_relay_drains_standby_and_switches_sources_without_reconnecting() {
         LiveEvent::Ended(_)
     ));
     second_tx
-        .send(LiveEvent::Video(10, frame::Video::empty()))
+        .send(LiveEvent::Video(
+            10,
+            frame::Video::empty(),
+            Default::default(),
+        ))
         .unwrap();
     assert!(matches!(
         output_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
@@ -492,7 +512,11 @@ fn manual_relay_drains_standby_and_switches_sources_without_reconnecting() {
         LiveEvent::Ended(_)
     ));
     second_tx
-        .send(LiveEvent::Video(10, frame::Video::empty()))
+        .send(LiveEvent::Video(
+            10,
+            frame::Video::empty(),
+            Default::default(),
+        ))
         .unwrap();
     assert!(output_rx.recv_timeout(Duration::from_millis(30)).is_err());
     second_tx.send(LiveEvent::Ended(10)).unwrap();
@@ -504,7 +528,11 @@ fn manual_relay_drains_standby_and_switches_sources_without_reconnecting() {
         })
         .unwrap();
     second_tx
-        .send(LiveEvent::Video(11, frame::Video::empty()))
+        .send(LiveEvent::Video(
+            11,
+            frame::Video::empty(),
+            Default::default(),
+        ))
         .unwrap();
     let reconnected = wait_for_ready(&control, 2, Some(&second));
     assert_ne!(second, reconnected);
@@ -533,7 +561,12 @@ fn manual_stop_invalidates_buffered_live_frames_before_they_reach_output() {
         listener_id: 1,
     })
     .unwrap();
-    tx.send(LiveEvent::Video(1, frame::Video::empty())).unwrap();
+    tx.send(LiveEvent::Video(
+        1,
+        frame::Video::empty(),
+        Default::default(),
+    ))
+    .unwrap();
     let mut output = CountingOutput::default();
     LiveOverrideOutput::new(&mut output, &mut live, &playback)
         .pump_live()
@@ -541,7 +574,12 @@ fn manual_stop_invalidates_buffered_live_frames_before_they_reach_output() {
     assert!(playback.live_active());
     let frames = output.video_frames;
     control.select(1, &session, false).unwrap();
-    tx.send(LiveEvent::Video(1, frame::Video::empty())).unwrap();
+    tx.send(LiveEvent::Video(
+        1,
+        frame::Video::empty(),
+        Default::default(),
+    ))
+    .unwrap();
     LiveOverrideOutput::new(&mut output, &mut live, &playback)
         .pump_live()
         .unwrap();
@@ -575,7 +613,12 @@ fn multiple_listeners_select_priority_without_preempting_active_session() {
         .send(LiveEvent::Audio(1, frame::Audio::empty()))
         .unwrap();
     for tx in [&high_tx, &low_tx] {
-        tx.send(LiveEvent::Video(1, frame::Video::empty())).unwrap();
+        tx.send(LiveEvent::Video(
+            1,
+            frame::Video::empty(),
+            Default::default(),
+        ))
+        .unwrap();
     }
 
     let slots = [high_rx, low_rx]
@@ -611,7 +654,7 @@ fn multiple_listeners_select_priority_without_preempting_active_session() {
     ));
     assert!(matches!(
         out_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
-        LiveEvent::Video(1, _)
+        LiveEvent::Video(1, _, _)
     ));
     assert!(matches!(
         out_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
@@ -624,7 +667,11 @@ fn multiple_listeners_select_priority_without_preempting_active_session() {
         LiveEvent::Ended(1)
     ));
     low_tx
-        .send(LiveEvent::Video(1, frame::Video::empty()))
+        .send(LiveEvent::Video(
+            1,
+            frame::Video::empty(),
+            Default::default(),
+        ))
         .unwrap();
     assert!(matches!(
         out_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
@@ -636,7 +683,7 @@ fn multiple_listeners_select_priority_without_preempting_active_session() {
     ));
     assert!(matches!(
         out_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
-        LiveEvent::Video(2, _)
+        LiveEvent::Video(2, _, _)
     ));
 
     abort.store(true, Ordering::Relaxed);
@@ -658,7 +705,11 @@ fn blocked_on_air_output_does_not_block_standby_listener() {
         })
         .unwrap();
     high_tx
-        .send(LiveEvent::Video(1, frame::Video::empty()))
+        .send(LiveEvent::Video(
+            1,
+            frame::Video::empty(),
+            Default::default(),
+        ))
         .unwrap();
 
     let slots = [test_live_receiver(high_rx), test_live_receiver(low_rx)]
@@ -698,7 +749,11 @@ fn blocked_on_air_output_does_not_block_standby_listener() {
 
         for _ in 0..20 {
             if low_tx
-                .send(LiveEvent::Video(1, frame::Video::empty()))
+                .send(LiveEvent::Video(
+                    1,
+                    frame::Video::empty(),
+                    Default::default(),
+                ))
                 .is_err()
             {
                 return;
@@ -719,7 +774,7 @@ fn blocked_on_air_output_does_not_block_standby_listener() {
     );
     let high_video = matches!(
         out_rx.recv_timeout(Duration::from_secs(1)),
-        Ok(LiveEvent::Video(1, _))
+        Ok(LiveEvent::Video(1, _, _))
     );
     abort.store(true, Ordering::Relaxed);
     drop(out_rx);
@@ -914,7 +969,8 @@ fn startup_ring_buffer_accepts_late_video_without_reconnect() {
     assert!(!control.live_active());
     let mut video = frame::Video::empty();
     video.set_pts(Some(320));
-    tx.send(LiveEvent::Video(1, video)).unwrap();
+    tx.send(LiveEvent::Video(1, video, Default::default()))
+        .unwrap();
     LiveOverrideOutput::new(&mut output, &mut live, &control)
         .pump_live()
         .unwrap();
@@ -1088,6 +1144,63 @@ fn live_audio_recovers_after_a_transient_video_timestamp_jump() {
 #[test]
 fn live_audio_continues_without_a_timestamp_jump() {
     assert_live_audio_recovers_after_timestamp_jump(0, 0);
+}
+
+#[test]
+fn live_gap_padding_keeps_previous_text_until_the_new_frame_arrives() {
+    use crate::graphics::text_adapter::TextOverlays;
+    use ff_graphics::{animation::TextPreparation, ffmpeg::text::TextOverlay, style::TextStyle};
+    #[derive(Default)]
+    struct TextCapture {
+        current: bool,
+        visible: Vec<bool>,
+    }
+    impl FrameOutput for TextCapture {
+        fn audio_frame_size(&self) -> usize {
+            1024
+        }
+        fn encode_audio(&mut self, _: &frame::Audio) -> Result<()> {
+            Ok(())
+        }
+        fn retains_text_overlays(&self) -> bool {
+            true
+        }
+        fn apply_text_overlays(&mut self, _: &mut frame::Video, texts: TextOverlays) {
+            self.current = texts.iter().any(Option::is_some);
+        }
+        fn encode_video(&mut self, _: &frame::Video) -> Result<()> {
+            self.visible.push(self.current);
+            Ok(())
+        }
+    }
+    let (_tx, rx) = mpsc::channel();
+    let mut live = test_live_receiver(rx);
+    live.active = true;
+    let overlay = TextOverlay::prepare(
+        &TextStyle::default(),
+        "M",
+        TextPreparation {
+            canvas_width: 64,
+            canvas_height: 64,
+            frames_per_second: 25,
+            timing: Default::default(),
+        },
+    )
+    .unwrap()
+    .unwrap();
+    live.texts = [overlay.snapshot(0, 0), None];
+    let mut output = TextCapture::default();
+    let control = crate::PlaybackControl::default();
+    let mut wrapper = LiveOverrideOutput::new(&mut output, &mut live, &control);
+    wrapper.start_live_session(0.0);
+    let mut first = frame::Video::new(ffmpeg_next::format::Pixel::YUV420P, 64, 64);
+    first.set_pts(Some(0));
+    wrapper.encode_live_video_frame(first).unwrap();
+    wrapper.live.texts = Default::default();
+    let mut next = frame::Video::new(ffmpeg_next::format::Pixel::YUV420P, 64, 64);
+    next.set_pts(Some(3));
+    wrapper.encode_live_video_frame(next).unwrap();
+    assert_eq!(wrapper.output.visible, [true, true, true, false]);
 }
 
 #[test]
@@ -1829,7 +1942,8 @@ fn regression_live_padding_progresses_before_audio_start() {
     for pts in 0..32 {
         let mut video = frame::Video::new(ffmpeg_next::format::Pixel::YUV420P, 4, 4);
         video.set_pts(Some(pts));
-        tx.send(LiveEvent::Video(1, video)).unwrap();
+        tx.send(LiveEvent::Video(1, video, Default::default()))
+            .unwrap();
     }
 
     let (video_tx, video_rx) = mpsc::sync_channel(8);
@@ -1947,6 +2061,7 @@ fn live_limiter_reads_the_next_buffered_packet_and_keeps_audio_pts() {
     tx.send(LiveEvent::Video(
         1,
         frame::Video::new(ffmpeg_next::format::Pixel::YUV420P, 4, 4),
+        Default::default(),
     ))
     .unwrap();
     let mut before = audio_frame(0, 1_024);
@@ -1999,7 +2114,8 @@ fn delayed_live_takeover_keeps_audio_video_timing_and_drains_disconnected_tail()
     .unwrap();
     let mut video = frame::Video::new(ffmpeg_next::format::Pixel::YUV420P, 4, 4);
     video.set_pts(Some(25));
-    tx.send(LiveEvent::Video(1, video)).unwrap();
+    tx.send(LiveEvent::Video(1, video, Default::default()))
+        .unwrap();
     tx.send(LiveEvent::Audio(1, audio_frame(48_000, 1024)))
         .unwrap();
 
@@ -2061,6 +2177,7 @@ fn live_status_tracks_takeover_end_and_receiver_drop() {
     tx.send(LiveEvent::Video(
         1,
         frame::Video::new(ffmpeg_next::format::Pixel::YUV420P, 4, 4),
+        Default::default(),
     ))
     .unwrap();
     LiveOverrideOutput::new(&mut output, &mut live, &control)
@@ -2084,6 +2201,7 @@ fn live_status_tracks_takeover_end_and_receiver_drop() {
     tx.send(LiveEvent::Video(
         2,
         frame::Video::new(ffmpeg_next::format::Pixel::YUV420P, 4, 4),
+        Default::default(),
     ))
     .unwrap();
     LiveOverrideOutput::new(&mut output, &mut live, &control)
@@ -2105,7 +2223,12 @@ fn navigation_reservation_preserves_first_live_frame_until_next_clip() {
     let control = crate::PlaybackControl::default();
     let navigation = control.begin_navigation().unwrap();
     let mut output = CountingOutput::default();
-    tx.send(LiveEvent::Video(1, frame::Video::empty())).unwrap();
+    tx.send(LiveEvent::Video(
+        1,
+        frame::Video::empty(),
+        Default::default(),
+    ))
+    .unwrap();
     let mut wrapper = LiveOverrideOutput::new(&mut output, &mut live, &control);
     wrapper.pump_live().unwrap();
     assert!(!control.live_active());
@@ -2189,8 +2312,18 @@ fn active_live_wait_observes_skip_and_restart() {
 fn busy_live_queue_observes_skip_and_restart_between_frames() {
     for restart in [false, true] {
         let (tx, rx) = mpsc::sync_channel(2);
-        tx.send(LiveEvent::Video(1, frame::Video::empty())).unwrap();
-        tx.send(LiveEvent::Video(1, frame::Video::empty())).unwrap();
+        tx.send(LiveEvent::Video(
+            1,
+            frame::Video::empty(),
+            Default::default(),
+        ))
+        .unwrap();
+        tx.send(LiveEvent::Video(
+            1,
+            frame::Video::empty(),
+            Default::default(),
+        ))
+        .unwrap();
         let mut live = test_live_receiver(rx);
         live.session_id = 1;
         live.active = true;
@@ -2287,6 +2420,7 @@ fn live_frame_sender_waits_until_full_channel_has_capacity() {
         let listener_abort = Arc::clone(&listener_abort);
         move || {
             let mut sender = LiveFrameSender {
+                texts: Default::default(),
                 tx,
                 session_id: 1,
                 diagnostics,
@@ -2295,7 +2429,11 @@ fn live_frame_sender_waits_until_full_channel_has_capacity() {
                 channel_id: 0,
             };
             sender
-                .send_frame(LiveEvent::Video(1, frame::Video::empty()))
+                .send_frame(LiveEvent::Video(
+                    1,
+                    frame::Video::empty(),
+                    Default::default(),
+                ))
                 .unwrap();
             worker_finished.store(true, Ordering::Relaxed);
         }
@@ -2315,7 +2453,7 @@ fn live_frame_sender_waits_until_full_channel_has_capacity() {
     ));
     worker.join().unwrap();
     assert!(send_finished.load(Ordering::Relaxed));
-    assert!(matches!(rx.try_recv(), Ok(LiveEvent::Video(1, _))));
+    assert!(matches!(rx.try_recv(), Ok(LiveEvent::Video(1, _, _))));
     assert!(matches!(
         rx.try_recv(),
         Err(TryRecvError::Empty | TryRecvError::Disconnected)
@@ -2662,6 +2800,7 @@ fn live_frame_sender_stops_waiting_when_aborted() {
     .unwrap();
     let abort = Arc::new(AtomicBool::new(true));
     let mut sender = LiveFrameSender {
+        texts: Default::default(),
         tx,
         session_id: 1,
         diagnostics: Arc::new(LiveInputDiagnostics::new(1, 1)),
@@ -2672,7 +2811,11 @@ fn live_frame_sender_stops_waiting_when_aborted() {
 
     assert!(
         sender
-            .send_frame(LiveEvent::Video(1, frame::Video::empty()))
+            .send_frame(LiveEvent::Video(
+                1,
+                frame::Video::empty(),
+                Default::default()
+            ))
             .is_err()
     );
 }
@@ -2682,6 +2825,7 @@ fn live_frame_sender_reports_disconnected_channel() {
     let (tx, rx) = mpsc::sync_channel(1);
     drop(rx);
     let mut sender = LiveFrameSender {
+        texts: Default::default(),
         tx,
         session_id: 1,
         diagnostics: Arc::new(LiveInputDiagnostics::new(1, 1)),
@@ -2692,7 +2836,11 @@ fn live_frame_sender_reports_disconnected_channel() {
 
     assert!(
         sender
-            .send_frame(LiveEvent::Video(1, frame::Video::empty()))
+            .send_frame(LiveEvent::Video(
+                1,
+                frame::Video::empty(),
+                Default::default()
+            ))
             .is_err()
     );
 }
@@ -2700,7 +2848,12 @@ fn live_frame_sender_reports_disconnected_channel() {
 #[test]
 fn pump_live_ignores_frames_from_stale_sessions() {
     let (tx, rx) = mpsc::sync_channel(live_channel_capacity(25));
-    tx.send(LiveEvent::Video(2, frame::Video::empty())).unwrap();
+    tx.send(LiveEvent::Video(
+        2,
+        frame::Video::empty(),
+        Default::default(),
+    ))
+    .unwrap();
     tx.send(LiveEvent::Audio(2, frame::Audio::empty())).unwrap();
     tx.send(LiveEvent::Ended(2)).unwrap();
     let mut live = test_live_receiver(rx);

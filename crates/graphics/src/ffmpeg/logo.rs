@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use anyhow::{Result, anyhow};
 use ffmpeg_next::{codec, frame, media, software::scaling, util::format::pixel::Pixel};
 
@@ -16,7 +18,7 @@ use crate::{
 #[derive(Clone)]
 pub struct LogoOverlay {
     pub frame: frame::Video, // YUVA420P
-    chroma_alpha: Vec<u8>,
+    chroma_alpha: Arc<[u8]>,
     bounds: OverlayBounds,
     pub x: u32,
     pub y: u32,
@@ -128,7 +130,7 @@ impl LogoOverlay {
         }
 
         Ok(Self {
-            chroma_alpha: chroma_alpha(&frame, width, height),
+            chroma_alpha: chroma_alpha(&frame, width, height).into(),
             bounds,
             frame,
             x: even(x),
@@ -137,6 +139,48 @@ impl LogoOverlay {
             height,
             opacity: (config.opacity * 255.0).round().clamp(0.0, 255.0) as u8,
         })
+    }
+
+    /// Prepare an already scaled YUVA surface outside the compositor hot path.
+    pub fn from_yuva(
+        config: &LogoStyle,
+        frame: frame::Video,
+        output_width: u32,
+        output_height: u32,
+    ) -> Result<Self> {
+        anyhow::ensure!(
+            frame.format() == Pixel::YUVA420P,
+            "logo surface must be YUVA420P"
+        );
+        anyhow::ensure!(
+            (0.0..=1.0).contains(&config.opacity) && config.opacity.is_finite(),
+            "invalid logo opacity"
+        );
+        let width = frame.width();
+        let height = frame.height();
+        let (x, y) = logo_position(&config.position, output_width, output_height, width, height)?;
+        let bounds = alpha_bounds(&frame);
+        if config.opacity > 0.0 {
+            prepare_execution(bounds);
+        }
+
+        Ok(Self {
+            chroma_alpha: chroma_alpha(&frame, width, height).into(),
+            bounds,
+            frame,
+            x: even(x),
+            y: even(y),
+            width,
+            height,
+            opacity: (config.opacity * 255.0).round() as u8,
+        })
+    }
+
+    pub fn storage_bytes(&self) -> usize {
+        (0..self.frame.planes())
+            .map(|plane| self.frame.data(plane).len())
+            .sum::<usize>()
+            .saturating_add(self.chroma_alpha.len())
     }
 
     pub fn as_overlay(&self) -> OverlayRef<'_> {

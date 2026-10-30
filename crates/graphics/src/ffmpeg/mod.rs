@@ -4,6 +4,7 @@ use ffmpeg_next::{ffi, frame};
 
 pub mod logo;
 pub mod overlay;
+pub mod source;
 pub mod text;
 
 pub fn reference_video_frame(source: &frame::Video) -> Result<frame::Video> {

@@ -314,7 +314,7 @@ export default {
             'Ignorar strings que contenham linhas correspondentes; o formato é uma lista separada por ponto e vírgula.',
         processingHelp: 'O processamento padrão para todos os clipes garante a exclusividade.',
         processingLogoPath:
-            'O logotipo só é usado se o caminho existir; o caminho é relativo à pasta de armazenamento.',
+            'Caminho relativo à pasta de armazenamento. Imagens estáticas, GIFs animados e vídeos locais podem ser usados como logotipos. As animações se repetem indefinidamente; o áudio do vídeo é ignorado.',
         processingLogoScale: `Deixe a escala do logotipo em branco se não for necessário escalonamento. O formato é 'largura:altura', por exemplo: '100:-1' ou '12%:-1' para escalonamento proporcional.`,
         processingLogoPosition: `A posição é especificada no formato 'x:y'.`,
         processingAudioTracks: 'Especifique quantas faixas de áudio devem ser processadas.',

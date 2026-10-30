@@ -18,7 +18,7 @@ Check the [releases](https://github.com/ffplayout/ffplayout/releases/latest) for
 - replace missing playlist or clip with single filler or multiple fillers from folder, if no filler exists, create dummy clip
 - playing clips in [watched](/docs/folder_mode.md) folder mode
 - send emails and [HTTP push notifications](/docs/notifications.md) for log alerts
-- overlay a logo
+- overlay a [static or animated logo](docs/animated_logos.md)
 - overlay text, controllable through [web frontend](/frontend/)
 - loop playlist infinitely
 - [remote source](/docs/remote_source.md)

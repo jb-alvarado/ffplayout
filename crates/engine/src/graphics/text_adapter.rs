@@ -14,6 +14,25 @@ pub(crate) use ff_graphics::text::{available_font_families, init};
 pub(crate) use ff_graphics::text::{render_left_aligned_text_bitmap, render_wrapped_text_bitmap};
 
 pub(crate) use ff_graphics::animation::{TextPreparation, TextTiming};
+pub(crate) use ff_graphics::ffmpeg::text::{TextFrame, TextOverlays};
+
+pub(crate) fn measure_text<T>(index: usize, text: &TextFrame, blend: impl FnOnce() -> T) -> T {
+    let (width, height) = text.dimensions();
+    let stage = if index == 0 {
+        crate::benchmark::Stage::TextStatic
+    } else {
+        crate::benchmark::Stage::TextRuntime
+    };
+    crate::benchmark::measure_overlay(stage, width, height, blend)
+}
+
+pub(crate) fn blend_text_overlays(target: &mut frame::Video, texts: &TextOverlays) {
+    for (index, text) in texts.iter().enumerate() {
+        if let Some(text) = text {
+            measure_text(index, text, || text.blend(target));
+        }
+    }
+}
 
 pub struct TextOverlay(PreparedTextOverlay);
 
@@ -44,10 +63,15 @@ impl TextOverlay {
         Ok(PreparedTextOverlay::prepare(&style, &text, context)?.map(Self))
     }
 
+    pub fn snapshot(&self, program_frame: i64, scroll_frame: i64) -> Option<TextFrame> {
+        self.0.snapshot(program_frame, scroll_frame)
+    }
+
     pub fn blend(&mut self, target: &mut frame::Video, program_frame: i64, scroll_frame: i64) {
         self.0.blend(target, program_frame, scroll_frame);
     }
 
+    #[cfg(test)]
     pub fn dimensions(&self) -> (u32, u32) {
         self.0.dimensions()
     }

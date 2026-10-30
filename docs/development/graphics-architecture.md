@@ -16,14 +16,17 @@ application, channels, output protocols, or encoders.
 The initial extraction retained the current rendering and blending algorithms.
 Follow-up fixes make native text alpha handling explicit and correct, while the
 per-frame YUV blend kernel and production compositing policy remain unchanged.
-It does not introduce a scene controller, a new command queue, animated asset
-playback, a GPU path, Servo, or linear-light production compositing.
+The subsequent animated-logo milestone adds bounded image/video source playback.
+It does not introduce a scene controller, a new command queue, a GPU path, Servo,
+or linear-light production compositing. See [Animated logos](../animated_logos.md).
 
 ## Modules and contracts
 
 | Module | Responsibility |
 | --- | --- |
 | `ff_graphics::bitmap` | Straight-alpha RGBA CPU bitmaps and source-over preparation of translucent text/background/subtitle layers |
+| `ff_graphics::source` | Backend-independent frame intervals and exact rational loop timing |
+| `ff_graphics::ffmpeg::source` | Incremental image/video decoder and reusable YUVA preparation on an owned worker |
 | `ff_graphics::animation` | Backend-independent fade/scroll evaluation and named canvas/program-frame preparation context |
 | `ff_graphics::style` | Plain logo/text layout, colors, styling and existing transition parameters; no FFmpeg, font-library or GPU handles |
 | `ff_graphics::layout` | Backend-independent logo sizing and placement compatibility rules |
@@ -51,7 +54,8 @@ ignores the base alpha.
 The FFmpeg text adapter converts straight RGB to YUV and preserves per-pixel
 coverage. Chroma colors are reduced using coverage-weighted RGB so transparent
 neighbors cannot dilute edge colors. The video blend kernel applies coverage once.
-The ordinary logo decoding and signal-domain YUV blending path are unchanged.
+The signal-domain YUV blend kernels are unchanged. Logo decoding now prepares
+immutable timed surfaces rather than reopening and reading a first image per clip.
 
 `TextOverlay::prepare(style, text, TextPreparation { ... })` receives named canvas
 size, frame rate and `TextTiming` values. All timing values are canonical program
@@ -61,14 +65,22 @@ without any FFmpeg dependency. Backends apply their own pixel alignment rules.
 
 ## Compatibility adapters in the engine
 
-`crates/engine/src/graphics/` contains `logo_adapter.rs` and `text_adapter.rs` as pipeline adapters; rendering and blending live in `ff-graphics`.
+`crates/engine/src/graphics/` contains `logo_adapter.rs`, `text_adapter.rs`,
+`source.rs` (owned preparation/cache lifecycle) and `program.rs` (selection before
+output fan-out); rendering and blending live in `ff-graphics`.
 
 - `LogoConfig` retains its source path and existing public fields. The adapter
-  validates opacity, opens the source with the existing timeout policy and passes
-  the input plus a `LogoStyle` to the graphics backend. The graphics crate never
+  passes local file inputs and a `LogoStyle` to the graphics backend on its
+  preparation worker. The programme graphics source survives clip/live boundaries.
+  Selection happens after live timestamp mapping and audio lookahead; fades travel
+  with queued video frames. The graphics crate never
   imports the engine's media/network helpers.
 - `TextConfig` retains explicit text, filename selection and regex behavior. The
   engine resolves content and passes the resulting string with a `TextStyle`.
+  Immutable text snapshots retain placement and opacity with each video frame
+  through file/live queues and loudness lookahead. The final compositor blends
+  video, logo, configured text, then runtime text; scaled text bitmaps are cached
+  per composition resolution.
 - Existing exported color/position/weight types are re-exported through the
   engine, preserving callers' import paths.
 - Runtime text control, revision handling, live/file transitions and program

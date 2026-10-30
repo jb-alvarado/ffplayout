@@ -134,7 +134,7 @@ impl LiveDelay {
                             )
                         })
                         .any(|(received_at, event)| {
-                            matches!(event, LiveEvent::Video(id, _) if id == session_id)
+                            matches!(event, LiveEvent::Video(id, _, _) if id == session_id)
                                 && now.saturating_duration_since(*received_at) >= self.latency
                         });
 
@@ -190,7 +190,8 @@ mod tests {
             listener_id: 0,
         })
         .unwrap();
-        tx.send(LiveEvent::Video(1, video)).unwrap();
+        tx.send(LiveEvent::Video(1, video, Default::default()))
+            .unwrap();
         tx.send(LiveEvent::Audio(1, audio)).unwrap();
         tx.send(LiveEvent::Ended(1)).unwrap();
         drop(tx);
@@ -213,7 +214,7 @@ mod tests {
             Ok(LiveEvent::Started { session_id: 1, .. })
         ));
         assert!(
-            matches!(delay.next_event(&rx, ready), Ok(LiveEvent::Video(1, frame)) if frame.pts() == Some(25))
+            matches!(delay.next_event(&rx, ready), Ok(LiveEvent::Video(1, frame, _)) if frame.pts() == Some(25))
         );
         assert!(
             matches!(delay.next_event(&rx, ready), Ok(LiveEvent::Audio(1, frame)) if frame.pts() == Some(48_000))
@@ -278,7 +279,8 @@ mod tests {
             if tick % 2 == 0 {
                 let mut video = frame::Video::empty();
                 video.set_pts(Some((tick / 2) as i64));
-                tx.send(LiveEvent::Video(1, video)).unwrap();
+                tx.send(LiveEvent::Video(1, video, Default::default()))
+                    .unwrap();
             }
 
             let mut audio = frame::Audio::empty();
@@ -287,7 +289,7 @@ mod tests {
 
             while let Ok(event) = delay.next_event(&rx, now) {
                 match event {
-                    LiveEvent::Video(_, video) => {
+                    LiveEvent::Video(_, video, _) => {
                         assert_eq!(video.pts(), Some(video_count));
                         video_count += 1;
                     }
@@ -351,7 +353,12 @@ mod tests {
             delay.next_event(&rx, ready),
             Err(TryRecvError::Empty)
         ));
-        tx.send(LiveEvent::Video(1, frame::Video::empty())).unwrap();
+        tx.send(LiveEvent::Video(
+            1,
+            frame::Video::empty(),
+            Default::default(),
+        ))
+        .unwrap();
         tx.send(LiveEvent::Audio(1, make_audio(1_024))).unwrap();
         assert!(
             matches!(delay.next_event(&rx, ready), Ok(LiveEvent::Audio(1, frame)) if frame.pts() == Some(0))
@@ -362,7 +369,7 @@ mod tests {
 
         assert!(matches!(
             delay.next_event(&rx, next),
-            Ok(LiveEvent::Video(1, _))
+            Ok(LiveEvent::Video(1, _, _))
         ));
         assert!(matches!(
             delay.next_event(&rx, next),
@@ -396,7 +403,8 @@ mod tests {
             let received = start + Duration::from_millis(5 + pts * 40);
             let mut video = frame::Video::empty();
             video.set_pts(Some(pts as i64));
-            tx.send(LiveEvent::Video(1, video)).unwrap();
+            tx.send(LiveEvent::Video(1, video, Default::default()))
+                .unwrap();
             assert!(matches!(
                 delay.next_event(&rx, received),
                 Err(TryRecvError::Empty)
@@ -416,7 +424,7 @@ mod tests {
             }
 
             assert!(
-                matches!(delay.next_event(&rx, due), Ok(LiveEvent::Video(1, video)) if video.pts() == Some(pts as i64))
+                matches!(delay.next_event(&rx, due), Ok(LiveEvent::Video(1, video, _)) if video.pts() == Some(pts as i64))
             );
         }
 

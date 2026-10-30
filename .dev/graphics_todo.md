@@ -45,7 +45,8 @@ The architecture must support both an optimized YUV compositing path and an opti
 This is the extraction step, not completion of the minimal scene engine. General
 scene/layer state, surface descriptors/capability negotiation, bounded command
 handoff and resource lifecycle extensions remain open below. Do not treat
-animated logos, GPU, Servo, templates or new APIs as already implemented.
+GPU, Servo, templates or new APIs as already implemented. The animated-logo
+source milestone below is implemented separately; general scene/layer state remains open.
 
 ---
 
@@ -300,19 +301,30 @@ Logo configuration adapter → Graphics layer
                                       Compositor
 ```
 
-- [ ] Separate source-content animation (changing image frames) from layer animation (position, scale, opacity, and transitions). Both must be usable together.
+- [x] Separate source-content animation (changing image frames) from layer animation (position, scale, opacity, and transitions). Both must be usable together.
 - [ ] Define a reusable source interface that supplies prepared surfaces for a canonical program timestamp. Keep decoder, container, and pixel-storage details behind source adapters.
 - [ ] Evaluate initial formats such as image sequences and alpha-capable animated images/video; document supported formats and their alpha/color behavior before implementation. Do not promise all formats initially.
-- [ ] Preserve source frame durations, including variable durations, and map them to program presentation time rather than advancing one animation frame per video frame.
+- [x] Preserve source frame durations, including variable durations, and map them to program presentation time rather than advancing one animation frame per video frame.
 - [ ] Define source start time, repeat behavior, finite-loop completion (hold final frame or hide), explicit restart, and stop behavior.
-- [ ] Define behavior across pause, seek, clip boundaries, live takeovers, and timestamp resets using the canonical timeline. Decoder completion time must not become the animation clock.
-- [ ] Decode and prepare animated content outside the video processing thread with bounded look-ahead in time, frame count, and decoded bytes.
-- [ ] Avoid fully preloading arbitrarily long animations; evaluate bounded reuse for short loops separately.
-- [ ] When a frame is late, retain the last valid surface without blocking playout; before the first valid surface, keep the layer hidden. Select the frame appropriate to current program time when rendering catches up rather than replaying an obsolete backlog.
-- [ ] Distinguish delayed decoding from malformed/unsupported assets; apply the layer failure policy and expose useful status without repeated per-frame error logs.
-- [ ] Cancel obsolete jobs and release decoded buffers/decoder resources on replacement, stop, clear, and shutdown. Guard results with source revisions.
-- [ ] Static logos must not require a continuously running decoder or an additional worker. Share bounded preparation resources where practical rather than creating a thread per layer.
-- [ ] Keep the compositor unaware of whether a surface came from a static logo, animated source, native renderer, or future backend.
+- [x] Define behavior across pause, seek, clip boundaries, live takeovers, and timestamp resets using the canonical timeline. Decoder completion time must not become the animation clock.
+- [x] Decode and prepare animated content outside the video processing thread with bounded look-ahead in time, frame count, and decoded bytes.
+- [x] Avoid fully preloading arbitrarily long animations; evaluate bounded reuse for short loops separately.
+- [x] When a frame is late, retain the last valid surface without blocking playout; before the first valid surface, keep the layer hidden. Select the frame appropriate to current program time when rendering catches up rather than replaying an obsolete backlog.
+- [x] Distinguish delayed decoding from malformed/unsupported assets; apply the layer failure policy and expose useful status without repeated per-frame error logs.
+- [x] Cancel obsolete jobs and release decoded buffers/decoder resources on replacement, stop, clear, and shutdown. Guard results with source revisions.
+- [x] Static logos must not require a continuously running decoder or an additional worker. Share bounded preparation resources where practical rather than creating a thread per layer.
+- [x] Keep the compositor unaware of whether a surface came from a static logo, animated source, native renderer, or future backend.
+
+Implemented initial scope: existing logo configuration maps to a persistent
+program source with local PNG/GIF/video decoding, exact rational loop periods,
+64 MiB/256-frame/5-second caching, bounded streaming lookahead, immutable per-frame
+selection before fan-out, error containment and cancellation/join. See
+`docs/animated_logos.md` for supported test formats and limitations. The current
+single-logo implementation uses one owned worker per channel source. The
+backend-independent timing model is implemented, while a general surface/source
+contract, shared multi-layer scheduler, finite repeats and graphics commands
+remain open. Static assets use a one-time preparation worker that exits after
+caching; they retain no decoder or running worker during playback.
 
 This source abstraction should also support future animated lower thirds and
 other graphics. It must not depend on Servo or GPU rendering, and it must not

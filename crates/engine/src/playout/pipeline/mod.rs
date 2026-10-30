@@ -18,7 +18,7 @@ mod video;
 use crate::{
     OutputConfig,
     benchmark::{self, Stage},
-    graphics::logo_adapter::{LogoOverlay, blend_logo},
+    graphics::text_adapter::TextOverlays,
     input::diagnostics::LiveInputDiagnostics,
     output::FrameOutput,
     utils::{
@@ -188,8 +188,8 @@ fn load_timestamp(timestamp: &AtomicI64) -> Option<i64> {
 }
 
 struct VideoFrame {
+    texts: TextOverlays,
     frame: frame::Video,
-    logo: Option<Arc<LogoOverlay>>,
     opacity: f64,
     state: Timeline,
 }
@@ -201,24 +201,31 @@ struct AudioFrame {
 }
 
 struct FrameSender<'a> {
+    texts: TextOverlays,
     video: &'a PipelineQueue<VideoFrame>,
     audio: &'a PipelineQueue<AudioFrame>,
     state: Timeline,
     audio_size: usize,
     cfg: &'a OutputConfig,
     diagnostics: Option<&'a LiveInputDiagnostics>,
-    defer_logo: bool,
-    logo: Option<Arc<LogoOverlay>>,
     opacity: f64,
 }
 
 impl FrameOutput for FrameSender<'_> {
-    fn set_frame_timeline(&mut self, timeline: &Timeline) {
-        self.state = *timeline;
+    fn retains_text_overlays(&self) -> bool {
+        true
     }
 
-    fn benchmarks_logo_overlay(&self) -> bool {
-        !self.defer_logo
+    fn apply_text_overlays(&mut self, _: &mut frame::Video, overlays: TextOverlays) {
+        self.texts = overlays;
+    }
+
+    fn set_logo_opacity(&mut self, opacity: f64) {
+        self.opacity = opacity;
+    }
+
+    fn set_frame_timeline(&mut self, timeline: &Timeline) {
+        self.state = *timeline;
     }
 
     fn input_diagnostics(&self) -> Option<&LiveInputDiagnostics> {
@@ -235,8 +242,8 @@ impl FrameOutput for FrameSender<'_> {
             .sum();
         self.video.send(
             VideoFrame {
+                texts: self.texts.clone(),
                 frame: reference_video_frame(frame)?,
-                logo: self.logo.clone(),
                 opacity: self.opacity,
                 state: self.state,
             },
@@ -265,15 +272,6 @@ impl FrameOutput for FrameSender<'_> {
                 .map(|pts| pts.rescale(self.cfg.audio_time_base, rescale::TIME_BASE)),
         )
     }
-
-    fn apply_logo_overlay(&mut self, frame: &mut frame::Video, logo: &LogoOverlay, opacity: f64) {
-        if self.defer_logo {
-            self.logo.get_or_insert_with(|| Arc::new(logo.clone()));
-            self.opacity = opacity;
-        } else {
-            blend_logo(frame, logo, opacity);
-        }
-    }
 }
 
 struct CancelOnDrop<'a>(&'a PipelineControl);
@@ -299,7 +297,6 @@ struct WorkerContext<'a> {
     benchmark: &'a Option<benchmark::BenchHandle>,
     diagnostics: Option<&'a LiveInputDiagnostics>,
     audio_size: usize,
-    defer_logo: bool,
 }
 #[allow(clippy::too_many_arguments)]
 pub(super) fn play<O: FrameOutput>(
@@ -321,7 +318,6 @@ pub(super) fn play<O: FrameOutput>(
     let progress = Progress::new();
     let initial = *timeline;
     let audio_size = output.audio_frame_size();
-    let defer_logo = !output.benchmarks_logo_overlay();
     let has_video = plan.video.is_some();
     let has_embedded_audio = plan.audio.is_some();
     let video_index = plan
@@ -417,7 +413,6 @@ pub(super) fn play<O: FrameOutput>(
             benchmark: &benchmark,
             diagnostics,
             audio_size,
-            defer_logo,
         };
 
         if let Some(spec) = &plan.video {

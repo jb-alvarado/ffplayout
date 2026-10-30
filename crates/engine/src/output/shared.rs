@@ -484,7 +484,7 @@ pub(super) fn run(
                 // separately at each rendition would enlarge the logo relative
                 // to the picture whenever the player selects a smaller one.
                 let prepared = frame
-                    .has_visible_logo()
+                    .has_visible_graphics()
                     .then(|| frame.frame(composition_resolution.0, composition_resolution.1))
                     .transpose()?;
                 let video = prepared.as_ref().unwrap_or(&frame.source);

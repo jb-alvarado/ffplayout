@@ -1,3 +1,6 @@
 //! Pipeline compatibility adapters; rendering/compositing lives in ff-graphics.
 pub mod logo_adapter;
 pub mod text_adapter;
+
+pub(crate) mod program;
+pub(crate) mod source;

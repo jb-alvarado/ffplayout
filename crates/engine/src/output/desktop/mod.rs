@@ -183,6 +183,7 @@ pub(crate) struct DesktopFrameSender {
     audio_level_meter: AudioLevelMeter,
     loudness_meter: LoudnessMeter,
     deferred_logo: Option<(Arc<LogoOverlay>, f64)>,
+    deferred_texts: crate::graphics::text_adapter::TextOverlays,
     compositor: Arc<Mutex<VideoCompositor>>,
     parallel_output: Option<Arc<super::parallel::ParallelOutput>>,
     recording_sender: Option<SyncSender<DesktopRecordingMessage>>,
@@ -496,6 +497,7 @@ impl DesktopOutput {
                     ),
                     loudness_meter: LoudnessMeter::new(audio_sample_rate, loudness_meter_control),
                     deferred_logo: None,
+                    deferred_texts: Default::default(),
                     compositor,
                     parallel_output,
                     recording_sender,
@@ -570,6 +572,16 @@ impl DesktopOutput {
 }
 
 impl FrameOutput for DesktopFrameSender {
+    fn defer_text_overlays(&mut self, texts: &crate::graphics::text_adapter::TextOverlays) -> bool {
+        self.deferred_texts = texts.clone();
+        true
+    }
+
+    fn defer_shared_logo_overlay(&mut self, logo: &Arc<LogoOverlay>, opacity: f64) -> bool {
+        self.deferred_logo = Some((logo.clone(), opacity));
+
+        true
+    }
     fn audio_frame_size(&self) -> usize {
         1024
     }
@@ -584,30 +596,8 @@ impl FrameOutput for DesktopFrameSender {
         self.submit_video(frame, true)
     }
 
-    fn apply_logo_overlay(
-        &mut self,
-        _frame: &mut frame::Video,
-        logo: &LogoOverlay,
-        opacity_factor: f64,
-    ) {
-        self.deferred_logo = Some((Arc::new(logo.clone()), opacity_factor));
-    }
-
-    fn apply_shared_logo_overlay(
-        &mut self,
-        _frame: &mut frame::Video,
-        logo: &Arc<LogoOverlay>,
-        opacity_factor: f64,
-    ) {
-        self.deferred_logo = Some((logo.clone(), opacity_factor));
-    }
-
     fn clear_logo_overlay(&mut self) {
         self.deferred_logo = None;
-    }
-
-    fn benchmarks_logo_overlay(&self) -> bool {
-        false
     }
 
     fn encode_audio(&mut self, frame: &frame::Audio) -> Result<()> {
@@ -729,15 +719,16 @@ impl DesktopFrameSender {
                 (Some(logo.clone()), *opacity)
             });
         if let Some(output) = &self.parallel_output {
-            return output.prepare_desktop_video(frame, logo, opacity);
+            return output.prepare_desktop_video(frame, logo, opacity, self.deferred_texts.clone());
         }
 
-        ProgramVideo::new(
+        ProgramVideo::with_texts(
             frame,
             self.compositor.clone(),
             logo,
             opacity,
             BTreeMap::new(),
+            self.deferred_texts.clone(),
         )
     }
 
@@ -2337,6 +2328,7 @@ mod tests {
                 audio_level_meter: AudioLevelMeter::new(48_000, None),
                 loudness_meter: LoudnessMeter::new(48_000, Default::default()),
                 deferred_logo: None,
+                deferred_texts: Default::default(),
                 compositor: Arc::new(Mutex::new(VideoCompositor::default())),
                 parallel_output: None,
                 recording_sender: Some(recording_sender),
@@ -2378,9 +2370,7 @@ mod tests {
         for (index, opacity) in [0.25, 1.0, 0.0].into_iter().enumerate() {
             source.set_pts(Some(index as i64));
             if opacity > 0.0 {
-                harness
-                    .sender
-                    .apply_shared_logo_overlay(&mut source, &logo, opacity);
+                harness.sender.defer_shared_logo_overlay(&logo, opacity);
                 assert!(Arc::ptr_eq(
                     &harness.sender.deferred_logo.as_ref().unwrap().0,
                     &logo
@@ -2545,6 +2535,7 @@ mod tests {
             audio_level_meter: AudioLevelMeter::new(48_000, None),
             loudness_meter: LoudnessMeter::new(48_000, Default::default()),
             deferred_logo: None,
+            deferred_texts: Default::default(),
             compositor: Arc::new(Mutex::new(VideoCompositor::default())),
             recording_sender: Some(recording_sender),
             recording_active: Some(Arc::new(AtomicBool::new(true))),
@@ -2677,6 +2668,7 @@ mod tests {
             audio_level_meter: AudioLevelMeter::new(48_000, None),
             loudness_meter: LoudnessMeter::new(48_000, Default::default()),
             deferred_logo: None,
+            deferred_texts: Default::default(),
             compositor: Arc::new(Mutex::new(VideoCompositor::default())),
             recording_sender: Some(recording_sender),
             recording_active: Some(Arc::new(AtomicBool::new(true))),

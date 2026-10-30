@@ -1,4 +1,6 @@
 //! Prepare a straight-alpha text bitmap for the YUV420 compositor.
+use std::sync::Arc;
+
 use anyhow::{Context, Result};
 use ffmpeg_next::{frame, util::format::pixel::Pixel};
 
@@ -12,7 +14,7 @@ use crate::{
 use super::overlay::{OverlayFrame, alpha_bounds, blend_overlay, chroma_alpha, prepare_execution};
 
 pub struct TextOverlay {
-    overlay: OverlayFrame,
+    overlay: Arc<OverlayFrame>,
     playback: TextPlayback,
 }
 
@@ -36,7 +38,7 @@ impl TextOverlay {
         }
 
         Ok(Some(Self {
-            overlay: OverlayFrame {
+            overlay: Arc::new(OverlayFrame {
                 bounds,
                 frame: prepared,
                 chroma_alpha: alpha,
@@ -45,23 +47,128 @@ impl TextOverlay {
                 width: bitmap.width,
                 height: bitmap.height,
                 opacity: (style.opacity.clamp(0.0, 1.0) * 255.0).round() as u8,
-            },
+            }),
             playback,
         }))
     }
 
-    pub fn blend(&mut self, target: &mut frame::Video, program_frame: i64, scroll_frame: i64) {
+    pub fn snapshot(&self, program_frame: i64, scroll_frame: i64) -> Option<TextFrame> {
         let placement = self.playback.evaluate(program_frame, scroll_frame);
-        if placement.opacity <= 0.0 {
-            return;
+        (placement.opacity > 0.0).then(|| TextFrame {
+            surface: self.overlay.clone(),
+            x: even_signed(placement.x),
+            y: even_signed(placement.y),
+            opacity: placement.opacity,
+        })
+    }
+
+    pub fn blend(&mut self, target: &mut frame::Video, program_frame: i64, scroll_frame: i64) {
+        if let Some(snapshot) = self.snapshot(program_frame, scroll_frame) {
+            snapshot.blend(target);
         }
-        self.overlay.x = even_signed(placement.x);
-        self.overlay.y = even_signed(placement.y);
-        blend_overlay(target, self.overlay.as_ref(), placement.opacity);
     }
 
     pub fn dimensions(&self) -> (u32, u32) {
         (self.overlay.width, self.overlay.height)
+    }
+}
+
+/// Immutable pixels and per-program-frame placement; safe to retain in bounded queues.
+#[derive(Clone)]
+pub struct TextFrame {
+    surface: Arc<OverlayFrame>,
+    x: i32,
+    y: i32,
+    opacity: f64,
+}
+
+pub type TextOverlays = [Option<TextFrame>; 2];
+
+#[derive(Default)]
+pub struct TextScaleCache {
+    geometry: Option<((u32, u32), (u32, u32))>,
+    source: Option<Arc<OverlayFrame>>,
+    scaled: Option<Arc<OverlayFrame>>,
+}
+
+impl TextFrame {
+    pub fn dimensions(&self) -> (u32, u32) {
+        (self.surface.width, self.surface.height)
+    }
+
+    pub fn blend(&self, target: &mut frame::Video) {
+        let mut overlay = self.surface.as_ref().as_ref();
+        overlay.x = self.x;
+        overlay.y = self.y;
+        blend_overlay(target, overlay, self.opacity);
+    }
+
+    /// Scale a prepared bitmap only when its resource changes. Scrolling and
+    /// fading update placement without rerasterizing or rescaling the pixels.
+    pub fn blend_scaled(
+        &self,
+        target: &mut frame::Video,
+        canvas: (u32, u32),
+        cache: &mut TextScaleCache,
+    ) -> Result<()> {
+        let destination = (target.width(), target.height());
+        if canvas == destination {
+            self.blend(target);
+            return Ok(());
+        }
+        if cache.geometry != Some((canvas, destination))
+            || !cache
+                .source
+                .as_ref()
+                .is_some_and(|source| Arc::ptr_eq(source, &self.surface))
+        {
+            let width = ((u64::from(self.surface.width) * u64::from(destination.0)
+                / u64::from(canvas.0)) as u32)
+                .max(2)
+                & !1;
+            let height = ((u64::from(self.surface.height) * u64::from(destination.1)
+                / u64::from(canvas.1)) as u32)
+                .max(2)
+                & !1;
+            let mut scaler = ffmpeg_next::software::scaling::Context::get(
+                Pixel::YUVA420P,
+                self.surface.width,
+                self.surface.height,
+                Pixel::YUVA420P,
+                width,
+                height,
+                ffmpeg_next::software::scaling::flag::Flags::BILINEAR,
+            )?;
+            let mut prepared = frame::Video::empty();
+            scaler.run(&self.surface.frame, &mut prepared)?;
+            cache.scaled = Some(Arc::new(OverlayFrame {
+                bounds: alpha_bounds(&prepared),
+                chroma_alpha: chroma_alpha(&prepared, width, height),
+                frame: prepared,
+                width,
+                height,
+                x: 0,
+                y: 0,
+                opacity: self.surface.opacity,
+            }));
+            cache.source = Some(self.surface.clone());
+            cache.geometry = Some((canvas, destination));
+        }
+        if let Some(surface) = &cache.scaled {
+            let snapshot = Self {
+                surface: surface.clone(),
+                x: even_signed(
+                    (i64::from(self.x) * i64::from(destination.0) / i64::from(canvas.0)) as i32,
+                ),
+                y: even_signed(
+                    (i64::from(self.y) * i64::from(destination.1) / i64::from(canvas.1)) as i32,
+                ),
+                opacity: self.opacity,
+            };
+            snapshot.blend(target);
+        }
+
+        Ok(())
     }
 }
 
